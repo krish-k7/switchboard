@@ -110,11 +110,15 @@ the `test_server_legacy` tests to stay green.
    because Claude Code refreshes its cached copy of the plugin only when that version changes; CI
    refuses a mismatch (`.github/scripts/check-versions.sh`).
 2. Commit, merge to `main`, and push a tag on that commit: `v1.2.3` (a tag such as
-   `v1.2.3-rc.1` is published as a prerelease).
+   `v1.2.3-rc.1` is published as a prerelease). Tag a commit that main's CI ran on: the tip of a
+   push to `main` (CI on `main` runs every platform).
 3. The release workflow (`.github/workflows/release.yml`) checks that the tag names that version
-   and that its commit is on `main`, runs the whole CI workflow on Linux and macOS, builds four
-   binaries, checks that each reports the tag's version, and publishes them with `SHA256SUMS` as a
-   GitHub release.
+   and that its commit is on `main`, and requires a successful CI run on `main` for exactly that
+   commit (it reuses that run rather than testing again, waiting up to 30 minutes for one still
+   running, and fails with the run's link when there is none or it didn't pass). It then builds
+   four binaries, checks that each reports the tag's version, and publishes them with
+   `SHA256SUMS` as a GitHub release. Run by hand, the workflow runs the tests itself and builds
+   the binaries as artifacts without publishing.
 
 | Asset | Target | Runs on |
 | --- | --- | --- |

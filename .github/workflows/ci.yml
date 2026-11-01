@@ -4,7 +4,8 @@ name: CI
 # moved tag cannot change what runs.
 on:
   push:
-    # Tags are tested by the release workflow, which calls this one.
+    # Tags aren't tested again: the release workflow requires this
+    # workflow's successful run on main for the tagged commit.
     branches: ["**"]
   pull_request:
   workflow_call:

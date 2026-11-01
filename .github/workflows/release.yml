@@ -4,9 +4,12 @@ name: Release
 # and publishes them with SHA256SUMS as a GitHub Release. Only a tag on a
 # commit that is on main, whose version matches switchboard/Cargo.toml
 # and the Claude Code plugin's (.github/scripts/set-version.sh sets both),
-# and that passes the whole CI workflow (run again here on every platform)
-# is published. Running the workflow by hand runs the tests and builds the
-# same binaries as artifacts without publishing.
+# and for which main's CI workflow (every platform, on the push to main)
+# succeeded on exactly that commit is published: the release reuses that
+# run instead of testing again, waiting up to 30 minutes for one still
+# running. Tag a commit main's CI ran on (the tip of a push to main).
+# Running the workflow by hand runs the tests and builds the same binaries
+# as artifacts without publishing.
 #
 # Third-party actions are pinned by commit (the version in the comment), so a
 # moved tag cannot change what runs.
@@ -52,16 +55,73 @@ jobs:
             *) echo "::error::$TAG ($commit) is not on main (compared with main: $status); release only from main"; exit 1 ;;
           esac
 
+  main-ci:
+    name: main's CI passed on this commit
+    needs: verify
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    # Up to 30 minutes waiting for a CI run that is still going, then a
+    # clear failure.
+    timeout-minutes: 35
+    permissions:
+      actions: read
+    steps:
+      - name: Find main's CI run for exactly this commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ github.sha }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Runs of ci.yml on pushes to main for this exact commit, newest
+          # first. A rerun of a run keeps its ID and reports its latest
+          # attempt.
+          runs() {
+            gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$COMMIT&branch=main&event=push&per_page=20" \
+              --jq '.workflow_runs | sort_by(.created_at) | reverse | .[] | [.status, (.conclusion // ""), .html_url] | @tsv'
+          }
+          deadline=$((SECONDS + 1800))
+          while :; do
+            found=$(runs)
+            if [[ -z $found ]]; then
+              echo "::error::No CI run on main for $TAG ($COMMIT). Releases reuse the CI run of the push to main that made this commit main's tip; tag such a commit (or push it to main so CI runs), then run this workflow again."
+              exit 1
+            fi
+            if passed=$(awk -F '\t' '$1 == "completed" && $2 == "success" { print $3; exit }' <<< "$found") && [[ -n $passed ]]; then
+              echo "main's CI passed on $COMMIT: $passed"
+              exit 0
+            fi
+            latest=$(head -n 1 <<< "$found")
+            status=$(cut -f 1 <<< "$latest") conclusion=$(cut -f 2 <<< "$latest") url=$(cut -f 3 <<< "$latest")
+            if [[ $status == completed ]]; then
+              echo "::error::main's CI on $TAG ($COMMIT) ended $conclusion: $url. Fix it, or rerun it if it failed for no reason; once it passes, run this workflow again."
+              exit 1
+            fi
+            if (( SECONDS >= deadline )); then
+              echo "::error::main's CI on $TAG ($COMMIT) is still $status after 30 minutes: $url. Once it passes, run this workflow again."
+              exit 1
+            fi
+            echo "main's CI on $COMMIT is $status ($url); checking again in 30 seconds"
+            sleep 30
+          done
+
   test:
     name: tests
     needs: verify
+    # A run by hand has no CI run on main to reuse, so it runs the tests.
+    if: github.ref_type != 'tag'
     uses: ./.github/workflows/ci.yml
     with:
       all-platforms: true
 
   build:
     name: ${{ matrix.asset }}
-    needs: [verify, test]
+    needs: [verify, main-ci, test]
+    # One of main-ci (a tag) and test (a run by hand) runs; the other is
+    # skipped.
+    if: >-
+      !cancelled() && needs.verify.result == 'success' &&
+      (needs.main-ci.result == 'success' || needs.test.result == 'success')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -156,8 +216,10 @@ jobs:
 
   publish:
     name: publish
-    needs: [verify, test, build]
-    if: github.ref_type == 'tag'
+    needs: [verify, main-ci, build]
+    if: >-
+      !cancelled() && github.ref_type == 'tag' && needs.verify.result == 'success' &&
+      needs.main-ci.result == 'success' && needs.build.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
