@@ -44,6 +44,12 @@ fn process_start_digits(pid: &str) -> Result<String> {
             .ok_or_else(|| Error::value("missing process start field"));
     }
     if cfg!(target_os = "macos") {
+        // Read from the kernel directly; `ps` (a process spawn per check)
+        // only when that fails, so its errors stay what they were.
+        #[cfg(target_os = "macos")]
+        if let Some(value) = kernel_lstart(pid) {
+            return Ok(value);
+        }
         let value = ps_lstart(pid)?;
         let value = crate::text::strip(&value).to_string();
         if !value.is_empty() {
@@ -53,6 +59,52 @@ fn process_start_digits(pid: &str) -> Result<String> {
     Err(Error::value(
         "unsupported platform or missing process start",
     ))
+}
+
+/// `ps -o lstart=` for a live process, as `ps` prints it in the C locale and
+/// UTC (`Sat Oct 31 21:30:05 2026`), from the kernel's process start time.
+#[cfg(target_os = "macos")]
+fn kernel_lstart(pid: &str) -> Option<String> {
+    let pid: libc::c_int = pid.parse().ok().filter(|pid| *pid > 0)?;
+    // SAFETY: proc_bsdinfo is plain data; all-zero is valid.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: the buffer is a proc_bsdinfo of the size passed.
+    let filled = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            &mut info as *mut libc::proc_bsdinfo as *mut libc::c_void,
+            size,
+        )
+    };
+    if filled != size || info.pbi_pid as libc::c_int != pid || info.pbi_start_tvsec == 0 {
+        return None;
+    }
+    Some(lstart_text(info.pbi_start_tvsec as i64))
+}
+
+/// `strftime("%c")` in the C locale for a UTC time, which `ps` uses for lstart.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn lstart_text(seconds: i64) -> String {
+    const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let tm = crate::fmtutil::gmtime(seconds);
+    // 1970-01-01 was a Thursday.
+    let weekday = (seconds.div_euclid(86400) + 4).rem_euclid(7) as usize;
+    format!(
+        "{} {} {:>2} {:02}:{:02}:{:02} {}",
+        DAYS[weekday],
+        MONTHS[(tm.month - 1) as usize],
+        tm.day,
+        tm.hour,
+        tm.minute,
+        tm.second,
+        tm.year
+    )
 }
 
 fn ps_lstart(pid: &str) -> Result<String> {
@@ -313,6 +365,35 @@ mod tests {
         assert!(!first.is_empty());
         assert_eq!(first, process_start(pid).unwrap());
         assert_eq!(process_start(1).unwrap_err().message, "invalid PID");
+    }
+
+    /// The kernel's start time reads exactly as `ps` prints it, for every
+    /// process `ps` can see (the comparison native records rely on).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn kernel_start_time_matches_ps_for_every_process() {
+        let listed = Command::new("ps")
+            .args(["-A", "-o", "pid="])
+            .output()
+            .unwrap();
+        let mut compared = 0;
+        for pid in String::from_utf8(listed.stdout).unwrap().split_whitespace() {
+            let (Some(kernel), Ok(shown)) = (kernel_lstart(pid), ps_lstart(pid)) else {
+                continue; // Exited in between, or not ours to read.
+            };
+            assert_eq!(kernel, crate::text::strip(&shown), "PID {pid}");
+            compared += 1;
+        }
+        assert!(compared > 10, "only {compared} processes compared");
+    }
+
+    /// `%c` in the C locale pads one-digit days with a space.
+    #[test]
+    fn lstart_text_is_strftime_c() {
+        assert_eq!(lstart_text(0), "Thu Jan  1 00:00:00 1970");
+        assert_eq!(lstart_text(1_793_491_200), "Sun Nov  1 00:00:00 2026");
+        assert_eq!(lstart_text(1_793_404_799), "Fri Oct 30 23:59:59 2026");
+        assert_eq!(lstart_text(951_782_400), "Tue Feb 29 00:00:00 2000");
     }
 
     #[test]

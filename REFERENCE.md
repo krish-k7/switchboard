@@ -679,3 +679,4 @@ requires client certificates this way.
 | Message text | 8 KiB |
 | Messages kept on the server | 7 days, at most 10,000 |
 | Unconfirmed delivery | Reported to the sender as unknown after 30 seconds |
+| Reconnecting after losing the server | First retry within 2 seconds, then backing off to at most 60 seconds; within a second of a network change |

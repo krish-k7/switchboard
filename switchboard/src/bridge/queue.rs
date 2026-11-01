@@ -98,6 +98,14 @@ impl Flag {
         *self.set.lock().expect("flag")
     }
 
+    /// Wait until the flag is set, however long that takes.
+    pub fn wait_forever(&self) {
+        let mut set = self.set.lock().expect("flag");
+        while !*set {
+            set = self.changed.wait(set).expect("flag");
+        }
+    }
+
     /// Wait up to `timeout` for the flag: true once set.
     pub fn wait(&self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;

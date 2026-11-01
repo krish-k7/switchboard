@@ -292,9 +292,10 @@ bridge discovers only joined chats that are live.
 `{pid, procStart, platform, machine, connected, discovery_mode, discovery_detail, published,
 remote, updated_at}`. `discovery_mode` is `events`, `polling`, or null before the first scan;
 `published` lists the chats the server accepted with the names sent; `remote` counts visible
-remote `sessions` and `machines`. A connection failure clears `connected`. While the server
-refuses this machine itself (HTTP 401 or 403 with `not_enrolled` or `invalid_proxy_identity`), an
-extra `server_refused` field holds that code; `doctor` reads it.
+remote `sessions` and `machines`; `updated_at` is when the contents last changed (the file is not
+rewritten when nothing else in it would change). A connection failure clears `connected`. While the
+server refuses this machine itself (HTTP 401 or 403 with `not_enrolled` or
+`invalid_proxy_identity`), an extra `server_refused` field holds that code; `doctor` reads it.
 
 `delivered-ids.json` in `state_dir` (0600) holds the IDs of messages already handed to a chat, for
 one hour and at most 2,048, written before each handoff.
@@ -397,6 +398,12 @@ keeps its correlation so a later native receipt can still be relayed.
 - **Acknowledgments.** With a server that supports `ack`, the bridge acknowledges every processed
   event, including ones it rejected. Events discarded because of a stale generation or a lost
   registration are not acknowledged, so they are redelivered.
+- **Reconnecting.** After a lost connection or a failed registration the bridge registers again
+  after 1 to 2 seconds, doubling the wait after each failure in a row up to 30 to 60 seconds (each
+  wait is scaled by a random factor between one half and one). An answered poll resets it; a
+  network configuration change retries within a second (at most once every 10 seconds). A poll
+  the server rejects without ending the connection is retried after 1 to 2 seconds, then at most
+  every 4 seconds.
 - **Connections.** At most eight cached or active HTTPS connections, idle expiry after 30 seconds,
   replacement after 60 seconds of age, a 15-second timeout per socket operation, and no automatic
   retry of a failed request.
