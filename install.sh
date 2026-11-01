@@ -263,10 +263,10 @@ at_least() {
     [ "$v_patch" -ge "$4" ]
 }
 
-# The line in every Switchboard binary and in the command scripts releases
-# before 0.3.1 wrote: what marks a file at the command's path as one an
-# installer put there.
-marker='# Managed by switchboard install'
+# The text every Switchboard program from 0.3.1 on carries (install.rs,
+# PROGRAM_SIGNATURE): what marks the file at ~/.local/bin/switchboard as one
+# an installer put there.
+signature='switchboard-program-signature:7f3b9c1e5a2d4f60'
 
 # Whether this process can reach a terminal.
 has_terminal() { (exec < /dev/tty) 2>/dev/null && [ -t 2 ]; }
@@ -479,7 +479,10 @@ main() {
         if grep -q '^  "removed":' "$tmp/install.out"; then
             done_line "Removed what earlier versions installed in ~/bin and ~/.local/share/switchboard"
         fi
-        if grep -q '^  "plugin_link":' "$tmp/install.out"; then
+        if grep -q '^  "plugin_unknown":' "$tmp/install.out"; then
+            warn_line "Kept ~/bin/switchboard as a link to the command: Claude Code couldn't say which Switchboard plugin it has, and one older than 0.3.1 runs that path"
+            text "$color" 0 "If its plugin is current (\`claude plugin list\`), the next upgrade removes the link once Claude Code answers."
+        elif grep -q '^  "plugin_link":' "$tmp/install.out"; then
             warn_line "Kept ~/bin/switchboard as a link to the command: this machine's Claude Code plugin is older than 0.3.1 and runs that path"
             text "$color" 0 "Update the plugin with \`claude plugin marketplace update switchboard\`; the next upgrade removes the link."
         fi
@@ -497,18 +500,28 @@ main() {
     else
         # An earlier release, pinned: it writes the command to ~/bin and
         # refuses a program or link of a later release in its way, so those
-        # (and only files an installer wrote) go first.
+        # (and only files an installer wrote) are moved aside first, and put
+        # back if it fails.
         program=$HOME/bin/switchboard
+        moved= linked=
         if [ -f "$HOME/.local/bin/switchboard" ] && [ ! -L "$HOME/.local/bin/switchboard" ] &&
-            grep -q -F "$marker" "$HOME/.local/bin/switchboard" 2>/dev/null; then
-            rm -f "$HOME/.local/bin/switchboard"
+            grep -q -F "$signature" "$HOME/.local/bin/switchboard" 2>/dev/null; then
+            mv "$HOME/.local/bin/switchboard" "$tmp/moved-program" && moved=1
         fi
         if [ -L "$HOME/bin/switchboard" ] &&
             [ "$(readlink "$HOME/bin/switchboard")" = "$HOME/.local/bin/switchboard" ]; then
-            rm -f "$HOME/bin/switchboard"
+            rm -f "$HOME/bin/switchboard" && linked=1
         fi
-        "$tmp/$asset" install > "$tmp/install.out" ||
-            fail "Could not install $shown." "follow the message above, then run this again."
+        if ! "$tmp/$asset" install > "$tmp/install.out"; then
+            if [ -n "$moved" ] && [ ! -e "$HOME/.local/bin/switchboard" ] && [ ! -L "$HOME/.local/bin/switchboard" ]; then
+                mv "$tmp/moved-program" "$HOME/.local/bin/switchboard"
+            fi
+            if [ -n "$linked" ] && [ ! -e "$HOME/bin/switchboard" ] && [ ! -L "$HOME/bin/switchboard" ]; then
+                ln -s "$HOME/.local/bin/switchboard" "$HOME/bin/switchboard"
+            fi
+            fail "Could not install $shown, so the installed version was left as it was." \
+                "follow the message above, then run this again."
+        fi
         done_line "Installed the switchboard command in ~/bin"
         case ":$PATH:" in
             *":$HOME/bin:"* | *":$HOME/.local/bin:"*) command=switchboard ;;

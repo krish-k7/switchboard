@@ -252,8 +252,9 @@ It doesn't start the bridge unless given `--start`, and never joins chats or cha
 settings. On a machine that is down it neither enables the service nor starts it, even with
 `--start`, and its JSON adds `down: true`. Running it again upgrades in place; files it replaces
 are backed up under `~/.local/share/switchboard/backups/`, of which the newest 5 are kept (older
-ones it named are removed). It replaces only files it wrote (each carries a marker, and every
-Switchboard program carries it too), and moves a bridge service installed by an earlier version
+ones it named are removed). It replaces only files it wrote (each carries a marker: a line of its
+own in scripts and service files, and a signature built into every Switchboard program from
+0.3.1 on), and moves a bridge service installed by an earlier version
 under the old name (`com.vorelios.switchboard` on macOS, `switchboard.service` on Linux),
 restarting it if it was running.
 
@@ -262,10 +263,11 @@ command `~/bin/switchboard` (a wrapper script), and linked `~/.local/bin/switchb
 Python releases before them left their modules there too. Installing moves such an installation,
 removing only what an installer wrote:
 
-- `~/bin/switchboard`, when it is the wrapper (its marker line says so) or a link to the program.
-  A Claude Code plugin older than 0.3.1 runs that path, so while Claude Code lists one, it becomes
-  a link to `~/.local/bin/switchboard` instead (and stays when Claude Code can't answer); the
-  first install after the plugin is updated removes it. A `~/bin/switchboard` an installer didn't
+- `~/bin/switchboard`, when it is the wrapper (one of its lines is exactly the marker) or a link
+  to the program. A Claude Code plugin older than 0.3.1 runs that path, so while Claude Code lists
+  one, it becomes a link to `~/.local/bin/switchboard` instead; it stays, with JSON
+  `plugin_unknown`, while `claude plugin list` fails or takes over 10 seconds. The first install
+  after the plugin is updated removes it. A `~/bin/switchboard` an installer didn't
   write is left alone (JSON `left`).
 - `~/.local/bin/switchboard`, when it is the old link to `~/bin/switchboard`: the program takes
   its place. Anything else there that isn't a Switchboard program is refused (`unmanaged
@@ -282,7 +284,7 @@ removing only what an installer wrote:
 Its JSON: `command` (the program), `source` (its directory), `data`
 (`~/.local/share/switchboard`), `config`, `launch_agent` or `user_service`, `started`, and when
 they apply `migrated_from`, `down`, `removed` (the paths it removed), `pruned_backups` (how many
-backup folders), `plugin_link`, `old_program_kept`, `left`, and `cleanup_failed` (what it
+backup folders), `plugin_link`, `plugin_unknown`, `old_program_kept`, `left`, and `cleanup_failed` (what it
 couldn't remove, which never fails the install).
 
 ### `switchboard upgrade [VERSION] [--force]`

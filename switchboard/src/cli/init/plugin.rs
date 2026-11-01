@@ -89,7 +89,8 @@ pub fn lists_switchboard_before(value: &Value, version: &str) -> bool {
 }
 
 /// Whether Claude Code has the Switchboard plugin at a version older than
-/// `version`, asked as `installed` asks.
+/// `version`, asked as `installed` asks (but given 10 seconds, as an
+/// install waits on it).
 pub fn installed_before(claude: &str, version: &str) -> Result<bool, String> {
     let (code, stdout, stderr) = system::run(
         &[
@@ -98,7 +99,7 @@ pub fn installed_before(claude: &str, version: &str) -> Result<bool, String> {
             "list".into(),
             "--json".into(),
         ],
-        Duration::from_secs(30),
+        Duration::from_secs(10),
     )?;
     if code != 0 {
         return Err(first_line(&stderr, &stdout, "claude plugin list failed"));

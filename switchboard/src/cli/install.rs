@@ -279,8 +279,9 @@ pub fn links_to(link: &str, target: &str) -> bool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Found {
     Absent,
-    /// A file an installer wrote: a Switchboard program or an earlier
-    /// release's wrapper script, both of which carry the marker text.
+    /// A file an installer wrote: a Switchboard program (it carries
+    /// `PROGRAM_SIGNATURE`) or an earlier release's wrapper script (a line of
+    /// it is the marker).
     Ours,
     /// A link an installer made: `~/.local/bin/switchboard` to the old
     /// `~/bin/switchboard`, or `~/bin/switchboard` to the program.
@@ -289,27 +290,50 @@ pub enum Found {
     Foreign,
 }
 
-/// Whether the regular file at `path` (this user's, not a link) holds the
-/// installer's marker: wrapper scripts have it as a line, and every
-/// Switchboard binary has the text built in. The size cap keeps a large
-/// foreign file from being read whole.
-pub fn carries_marker(path: &str) -> bool {
-    let Ok(info) = fsutil::lstat(path) else {
-        return false;
-    };
+/// Text every Switchboard program from 0.3.1 on carries (the search below
+/// is for it, so the binary holds it): a file at `~/.local/bin/switchboard`
+/// that has it is a Switchboard program. install.sh looks for it too.
+pub const PROGRAM_SIGNATURE: &str = "switchboard-program-signature:7f3b9c1e5a2d4f60";
+
+/// The contents of the regular file at `path` (this user's, not a link), if
+/// it is at most `cap` bytes.
+fn read_own_file(path: &str, cap: u64) -> Option<Vec<u8>> {
+    let info = fsutil::lstat(path).ok()?;
     if !fsutil::is_type(&info, fsutil::S_IFREG)
         || info.uid() != fsutil::getuid()
-        || info.len() > 256 << 20
+        || info.len() > cap
     {
-        return false;
+        return None;
     }
-    let Ok(data) = std::fs::read(path) else {
+    std::fs::read(path).ok()
+}
+
+/// Whether text is a command script an installer wrote: one of its lines is
+/// exactly the installer's marker (or an earlier installer's).
+fn has_marker_line(text: &str) -> bool {
+    text.lines()
+        .any(|line| line == MARKER || line == LEGACY_MARKER)
+}
+
+/// Whether the file at `path` is a command script an installer wrote (at
+/// most 1 MiB is read).
+pub fn is_our_script(path: &str) -> bool {
+    read_own_file(path, 1 << 20)
+        .and_then(|data| String::from_utf8(data).ok())
+        .is_some_and(|text| has_marker_line(&text))
+}
+
+/// Whether the file at `path` is a Switchboard program (it carries
+/// `PROGRAM_SIGNATURE`) or a command script an installer wrote. The size
+/// cap keeps a large foreign file from being read whole.
+pub fn is_our_program(path: &str) -> bool {
+    let Some(data) = read_own_file(path, 256 << 20) else {
         return false;
     };
-    [MARKER, LEGACY_MARKER].iter().any(|marker| {
-        data.windows(marker.len())
-            .any(|window| window == marker.as_bytes())
-    })
+    let signature = std::hint::black_box(PROGRAM_SIGNATURE).as_bytes();
+    data.windows(signature.len())
+        .any(|window| window == signature)
+        || std::str::from_utf8(&data).is_ok_and(has_marker_line)
 }
 
 /// What is at the program's path, `~/.local/bin/switchboard`.
@@ -323,7 +347,7 @@ pub fn program_state(p: &Paths) -> Found {
                 Found::Foreign
             }
         }
-        Ok(_) if carries_marker(&p.program) => Found::Ours,
+        Ok(_) if is_our_program(&p.program) => Found::Ours,
         Ok(_) => Found::Foreign,
     }
 }
@@ -340,7 +364,7 @@ pub fn old_command_state(p: &Paths) -> Found {
             }
         }
         Ok(info) if fsutil::is_type(&info, fsutil::S_IFREG) => {
-            if read_text(&p.old_command).is_ok_and(|text| has_any_marker(&text)) {
+            if is_our_script(&p.old_command) {
                 Found::Ours
             } else {
                 Found::Foreign
@@ -484,7 +508,9 @@ pub fn prune_backups(p: &Paths) -> Result<usize> {
                 .then(|| (stamp.to_string(), nanos, path))
         })
         .collect();
-    folders.sort();
+    // Oldest first, by the nanoseconds since the epoch in each name (the
+    // local time beside them can go back with the clock or the zone).
+    folders.sort_by(|a, b| (a.1, &a.0).cmp(&(b.1, &b.0)));
     let surplus = folders.len().saturating_sub(KEEP_BACKUPS);
     for (_, _, path) in &folders[..surplus] {
         std::fs::remove_dir_all(path)
@@ -494,14 +520,15 @@ pub fn prune_backups(p: &Paths) -> Result<usize> {
 }
 
 /// Whether Claude Code has a Switchboard plugin that only knows
-/// `~/bin/switchboard` (before `PLUGIN_FINDS_LOCAL_BIN`). Without Claude
-/// Code on PATH there is none to serve (init finds the plugin the same
-/// way); when Claude Code can't answer, it may have one.
-fn plugin_needs_old_command() -> bool {
+/// `~/bin/switchboard` (before `PLUGIN_FINDS_LOCAL_BIN`): `Some(true)` when
+/// it lists one, `Some(false)` when it lists none or isn't on PATH (init
+/// finds the plugin the same way), `None` when it can't answer (it may have
+/// one).
+fn plugin_needs_old_command() -> Option<bool> {
     let Some(claude) = super::init::plugin::claude_path() else {
-        return false;
+        return Some(false);
     };
-    super::init::plugin::installed_before(&claude, PLUGIN_FINDS_LOCAL_BIN).unwrap_or(true)
+    super::init::plugin::installed_before(&claude, PLUGIN_FINDS_LOCAL_BIN).ok()
 }
 
 /// Make `~/bin/switchboard` a link to the program, replacing the wrapper
@@ -531,16 +558,26 @@ fn migrate(p: &Paths, result: &mut Map<String, Value>) {
     let mut note = |what: &str, error: Error| {
         problems.push(Value::from(format!("{what}: {}", error.message)));
     };
-    match old_command_state(p) {
+    let state = old_command_state(p);
+    let needed = if matches!(state, Found::Ours | Found::OurLink) {
+        plugin_needs_old_command()
+    } else {
+        Some(false)
+    };
+    match state {
         _ if same_file(&p.old_command, &p.program) => {}
-        Found::Ours | Found::OurLink if plugin_needs_old_command() => {
-            if old_command_state(p) == Found::Ours {
+        Found::Ours | Found::OurLink if needed != Some(false) => {
+            if state == Found::Ours {
                 match link_old_command(p) {
                     Ok(()) => {}
                     Err(error) => note(&p.old_command, error),
                 }
             }
             result.insert("plugin_link".into(), Value::from(p.old_command.clone()));
+            if needed.is_none() {
+                // Claude Code couldn't say which plugin it has.
+                result.insert("plugin_unknown".into(), Value::Bool(true));
+            }
         }
         Found::Ours | Found::OurLink => match fsutil::unlink(&p.old_command) {
             Ok(()) => removed.push(Value::from(p.old_command.clone())),
@@ -610,7 +647,10 @@ pub fn install(home: &str, binary_source: &str) -> Result<Map<String, Value>> {
         )));
     }
     if program_state(&p) == Found::Foreign {
-        return Err(Error::value(format!("unmanaged command: {}", p.program)));
+        return Err(Error::value(format!(
+            "unmanaged command: {} (Switchboard didn't write it; move it aside, then install again)",
+            p.program
+        )));
     }
     if fsutil::exists(&p.service) && !managed_service(&p.service)? {
         let what = if cfg!(target_os = "linux") {
@@ -1119,8 +1159,13 @@ pub fn migration_lines(result: &Map<String, Value>) -> Vec<String> {
         ));
     }
     if result.contains_key("plugin_link") {
+        let why = if result.contains_key("plugin_unknown") {
+            format!("Claude Code couldn't say which Switchboard plugin it has, and one older than {PLUGIN_FINDS_LOCAL_BIN} runs that path")
+        } else {
+            format!("the Claude Code plugin installed here is older than {PLUGIN_FINDS_LOCAL_BIN} and runs that path")
+        };
         lines.push(format!(
-            "Kept {} as a link to the program: the Claude Code plugin installed here is older than {PLUGIN_FINDS_LOCAL_BIN} and runs that path. Update the plugin (claude plugin marketplace update switchboard), and the next upgrade removes the link.",
+            "Kept {} as a link to the program: {why}. Update the plugin (claude plugin marketplace update switchboard), and the next upgrade removes the link.",
             text("plugin_link")
         ));
     }

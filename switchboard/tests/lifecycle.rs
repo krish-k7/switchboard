@@ -1779,6 +1779,45 @@ fn install_leaves_a_foreign_bin_command_alone() {
     );
     let text = stdout(&env.run(&["install"]));
     assert!(text.contains("Left ~/bin/switchboard alone"), "{text}");
+    // A script that only mentions the marker (not as a line of its own) is
+    // the user's too.
+    std::fs::remove_file(home.join("bin/switchboard")).unwrap();
+    let mentions = "#!/bin/sh\n# copied from: # Managed by switchboard install\necho mine\n";
+    std::fs::write(home.join("bin/switchboard"), mentions).unwrap();
+    let result = json_out(&env.run(&["install", "--json"]));
+    assert_eq!(result["left"], json!(home.join("bin/switchboard")));
+    assert_eq!(
+        std::fs::read_to_string(home.join("bin/switchboard")).unwrap(),
+        mentions
+    );
+    // At the program's path, such a script is refused, not replaced, and
+    // uninstall leaves it.
+    let program = home.join(".local/bin/switchboard");
+    std::fs::remove_file(&program).unwrap();
+    std::fs::write(&program, mentions).unwrap();
+    let refused = env.run(&["install"]);
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(
+        stderr(&refused).contains("unmanaged command: "),
+        "{}",
+        stderr(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("move it aside"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(std::fs::read_to_string(&program).unwrap(), mentions);
+    let output = env.run(&["cli", "uninstall", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(std::fs::read_to_string(&program).unwrap(), mentions);
+    std::fs::remove_file(&program).unwrap();
+    assert_eq!(env.run(&["install"]).status.code(), Some(0));
+    // Every Switchboard program carries the text that marks it.
+    assert!(switchboard::cli::install::is_our_program(binary()));
+    assert!(switchboard::cli::install::is_our_program(
+        program.to_str().unwrap()
+    ));
     // Uninstalling leaves it as well.
     let output = env.run(&["cli", "uninstall", "--json"]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
@@ -1796,6 +1835,7 @@ fn an_older_plugin_keeps_bin_switchboard_as_a_link_until_it_is_updated() {
     fake_claude(&env, Some("0.3.0"));
     let result = json_out(&env.run(&["install", "--json"]));
     assert_eq!(result["plugin_link"], json!(old_command));
+    assert!(result.get("plugin_unknown").is_none(), "{result}");
     assert_eq!(std::fs::read_link(&old_command).unwrap(), program);
     // The plugin's path runs the program.
     let output = env.run_program(old_command.to_str().unwrap(), &["--version"]);
@@ -1807,7 +1847,13 @@ fn an_older_plugin_keeps_bin_switchboard_as_a_link_until_it_is_updated() {
     fake_claude(&env, Some("fail"));
     let result = json_out(&env.run(&["install", "--json"]));
     assert_eq!(result["plugin_link"], json!(old_command));
+    assert_eq!(result["plugin_unknown"], json!(true));
     assert!(std::fs::read_link(&old_command).is_ok());
+    let text = stdout(&env.run(&["install"]));
+    assert!(
+        text.contains("Claude Code couldn't say which Switchboard plugin it has"),
+        "{text}"
+    );
     // Once the plugin finds the command itself, the link goes.
     fake_claude(&env, Some("0.3.1"));
     let result = json_out(&env.run(&["install", "--json"]));

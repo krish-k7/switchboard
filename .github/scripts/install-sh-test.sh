@@ -406,7 +406,10 @@ echo "\$*" >> "$work/old-calls"
 case "\$1" in
     --version) echo "switchboard 0.2.1" ;;
     status) printf '{\n  "ok": true,\n  "pid": 4242\n}\n' ;;
-    install) mkdir -p "\$HOME/bin" && cp "\$0" "\$HOME/bin/switchboard" && chmod 700 "\$HOME/bin/switchboard" ;;
+    install)
+        # As earlier releases refuse a command they didn't write.
+        if [ -e "$work/old-install-fails" ]; then echo "switchboard install: unmanaged command: \$HOME/bin/switchboard" >&2; exit 1; fi
+        mkdir -p "\$HOME/bin" && cp "\$0" "\$HOME/bin/switchboard" && chmod 700 "\$HOME/bin/switchboard" ;;
     start | stop) printf '{"ok": true}\n' ;;
     up | down)
         [ "\$2" != --help ] || exit 0
@@ -434,6 +437,25 @@ for shell in "${shells[@]}"; do
     { grep -qx 'stop --json' "$work/old-calls" && grep -qx 'start --json' "$work/old-calls"; } ||
         { cat "$work/old-calls"; fail "$shell: not restarted with stop and start"; }
     if grep -Eq '^(up|down)( |$)' "$work/old-calls"; then cat "$work/old-calls"; fail "$shell: asked 0.2.1 for up or down"; fi
+done
+
+for shell in "${shells[@]}"; do
+    step "$shell: an older release whose installer fails leaves the installed command in place"
+    rm -rf "$work/home" "$work/service-mode" "$work/loaded" && mkdir "$work/home"
+    echo '[{"id": "switchboard@switchboard", "version": "0.3.0"}]' > "$work/claude-plugins"
+    write_030
+    run "$shell" > "$work/out"
+    rm "$work/claude-plugins"
+    [[ -f $installed && $(readlink "$work/home/bin/switchboard") == "$installed" ]] || fail "$shell: setup for the failing downgrade"
+    touch "$work/old-install-fails"
+    if run "$shell" SWITCHBOARD_VERSION=0.2.1 SWITCHBOARD_GITHUB="http://127.0.0.1:$old_port" \
+        SWITCHBOARD_GITHUB_API="http://127.0.0.1:$old_port/api" > "$work/out" 2> "$work/err"; then
+        fail "$shell: a failing older installer succeeded"
+    fi
+    rm "$work/old-install-fails"
+    grep -q 'so the installed version was left as it was' "$work/err" || { cat "$work/err"; fail "$shell: wrong message"; }
+    cmp "$installed" "$binary" || fail "$shell: the command was not put back"
+    [[ $(readlink "$work/home/bin/switchboard") == "$installed" ]] || fail "$shell: the plugin's link was not put back"
 done
 
 echo

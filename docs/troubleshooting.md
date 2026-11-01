@@ -86,9 +86,10 @@ numbered steps.
 | `The --invite option needs a terminal to ask for the invite on.` | You ran the installer with `--invite` but no terminal (for example from a script). Set `SWITCHBOARD_INVITE` instead. |
 | `The --invite option doesn't take the invite on the command line, where other users can see it.` | You passed the invite itself after `--invite`. Set `SWITCHBOARD_INVITE` instead, or use `--invite` alone and paste the invite when asked. |
 | `Could not reach <host> (...)` | Check the machine's internet connection. |
-| `unmanaged command: ~/.local/bin/switchboard` | Something Switchboard didn't write is at the command's path (a file, or a link to anything but the old `~/bin/switchboard`). Move it aside if you don't need it, then install again. |
+| `unmanaged command: ~/.local/bin/switchboard (...)` | Something Switchboard didn't write is at the command's path (a file that isn't a Switchboard program, or a link to anything but the old `~/bin/switchboard`). Move it aside if you don't need it, then install again. |
+| `unsafe install directory: ~/.local/bin` | The directory must be yours, a real directory (not a link), and not writable by others (`chmod 755 ~/.local/bin`). |
 | `! Left ~/bin/switchboard alone: Switchboard didn't write it` | A `~/bin/switchboard` of your own stays. If `~/bin` comes before `~/.local/bin` on your `PATH`, it runs instead of Switchboard; rename or remove it. |
-| `! Kept ~/bin/switchboard as a link to the command: ...` | The Claude Code plugin here is older than 0.3.1 and runs that path. Run `claude plugin marketplace update switchboard` (then `/reload-plugins` in open chats); the next install or upgrade removes the link. |
+| `! Kept ~/bin/switchboard as a link to the command: ...` | The Claude Code plugin here is older than 0.3.1 and runs that path (or `claude plugin list` didn't answer, so it might be). Run `claude plugin marketplace update switchboard` (then `/reload-plugins` in open chats); the next install or upgrade removes the link. |
 
 Running the install command on a machine that is already set up only upgrades it. It restarts the
 bridge if it was running.
