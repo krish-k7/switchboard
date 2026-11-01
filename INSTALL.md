@@ -125,23 +125,22 @@ curl -fsSLO "$base/switchboard-linux-$arch"
 curl -fsSLO "$base/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS >&2
 chmod +x "switchboard-linux-$arch"
-sudo -n "./switchboard-linux-$arch" server install OPTIONS --json' |
-    sed 's/sbi1\.[A-Za-z0-9_-]*/(hidden)/'
+sudo -n "./switchboard-linux-$arch" server install OPTIONS --no-invite --json'
 ```
 
 The installer creates the `switchboard` system account, `/etc/switchboard/server.json`,
 `/var/lib/switchboard/`, the program in `/usr/local/lib/switchboard` (linked from
 `/usr/local/bin/switchboard`), and the `switchboard-server` systemd service, then starts it and
-waits until it answers. The pipeline's exit status is `sed`'s, so read the output: success is one
-JSON line with `"ok": true` (shortened here), and a failure is an error message or
-`{"ok": false, "error": ...}`.
+waits until it answers. Success is one JSON line with `"ok": true` (shortened here), and a failure
+is an error message or `{"ok": false, "error": ...}` with a nonzero exit status.
 
 ```text
-{"ok": true, "server_url": "https://ADDRESS:8743", "server_pin": "9fe3cade…", "certificate_reissued": false, "invite": "(hidden)", "started": true, "changed": [...], "setup": "switchboard init"}
+{"ok": true, "server_url": "https://ADDRESS:8743", "server_pin": "9fe3cade…", "certificate_reissued": false, "invite": null, "started": true, "changed": [...], "setup": "switchboard init"}
 ```
 
-The installer also prints a first invite; the `sed` filter hides it, and it expires unused after
-an hour. Step 5 makes a new one. The installer never changes firewalls. If a firewall or cloud
+`--no-invite` keeps the installer from making the first machine's invite, which it would
+otherwise print; step 5 makes one and pipes it straight to `init`. The installer never changes
+firewalls. If a firewall or cloud
 security group protects the server, port 8743 (or 443) must be open to the machines that join;
 ask the user before changing one.
 

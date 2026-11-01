@@ -74,6 +74,13 @@ sudo "$binary" server install --tls private --name localhost --name 127.0.0.1 --
 [[ $(json changed < "$work/rerun.json") == '[]' ]] || fail "rerun changed $(json changed < "$work/rerun.json")"
 [[ $(systemctl show -p MainPID --value switchboard-server.service) == "$before" ]] || fail "rerun restarted the server"
 
+step "--no-invite makes no invite, and says how to make one"
+sudo "$binary" server install --tls private --name localhost --name 127.0.0.1 --no-invite --json > "$work/noinvite.json"
+[[ $(json invite < "$work/noinvite.json") == null ]] || fail "--no-invite made an invite"
+sudo "$binary" server install --tls private --name localhost --name 127.0.0.1 --no-invite > "$work/noinvite.txt"
+! grep -q 'sbi1\.' "$work/noinvite.txt" || { cat "$work/noinvite.txt"; fail "--no-invite printed an invite"; }
+grep -q 'sudo switchboard server invite$' "$work/noinvite.txt" || { cat "$work/noinvite.txt"; fail "no hint to make an invite"; }
+
 step "the summary prints the first machine's invite and how to join with it"
 # Each run while no machine is enrolled replaces the invite an earlier run printed.
 sudo "$binary" server install --tls private --name localhost --name 127.0.0.1 > "$work/human.txt"

@@ -69,6 +69,8 @@ Options:
                     for more (default: this machine's host name and address)
   --port PORT       acme and private: the port to listen on
   --no-start        write everything, but do not start or restart the service
+  --no-invite       don't make the first machine's invite (for setups that make
+                    their own with switchboard server invite)
   --json            print the result as JSON
   -h, --help        show this help
 ";
@@ -90,6 +92,7 @@ pub struct Options {
     pub names: Vec<String>,
     pub port: Option<u16>,
     pub no_start: bool,
+    pub no_invite: bool,
     pub json: bool,
 }
 
@@ -146,6 +149,7 @@ pub fn parse(argv: &[String]) -> Result<Option<Options>, String> {
                 )
             }
             "--no-start" => options.no_start = true,
+            "--no-invite" => options.no_invite = true,
             "--json" => options.json = true,
             _ if argument.starts_with('-') => {
                 return Err(usage_error(&format!("unknown option {name}")))
@@ -944,7 +948,7 @@ pub(crate) fn install(options: &Options) -> Result<Outcome, String> {
     // the one an earlier run printed. Caddy mode without --domain does not
     // know the address machines use, so it prints none.
     let known_address = mode != Mode::Caddy || options.domain.is_some();
-    let invite = if !has_machines()? && known_address {
+    let invite = if !options.no_invite && !has_machines()? && known_address {
         let local = super::invites::Local {
             db: DB.into(),
             peers: REGISTRY.into(),

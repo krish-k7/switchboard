@@ -430,6 +430,7 @@ switchboard server install --tls caddy [--domain NAME]
 | `--name NAME` | `private`: a host name or address machines connect to; repeat for more. Default: the previous install's names, else the host name and primary address |
 | `--port PORT` | `acme` and `private`: the port to listen on |
 | `--no-start` | Write everything, but don't enable, start, or restart the service |
+| `--no-invite` | Don't make the first machine's invite (for setups that make their own with `server invite`); `invite` is then `null` |
 | `--json` | Print the result as JSON: `server_url`, `server_pin`, `certificate_reissued`, `invite`, `started`, `changed` |
 
 It creates the `switchboard` system account (home `/var/lib/switchboard`), the state directory, an

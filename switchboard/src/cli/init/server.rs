@@ -773,6 +773,7 @@ fn install_here(
             .or(Some(plan.port))
             .filter(|p| *p != if plan.tls == Tls::Acme { 443 } else { 8743 }),
         no_start: false,
+        no_invite: false,
         json: true,
     };
     let began = invites::now();
