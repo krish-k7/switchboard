@@ -1,0 +1,133 @@
+name: CI
+
+# Third-party actions are pinned by commit (the version in the comment), so a
+# moved tag cannot change what runs.
+on:
+  push:
+    # Tags are tested by the release workflow, which calls this one.
+    branches: ["**"]
+  pull_request:
+  workflow_call:
+    inputs:
+      all-platforms:
+        description: run the macOS tests too (they otherwise run only on main and pull requests)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # The workflow name keeps a release's call apart from pushes to the same ref.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  workflows:
+    name: workflow files and versions
+    # The release workflow runs only for a version tag; checking every
+    # workflow here catches its mistakes before a release does.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: actionlint
+        env:
+          VERSION: 1.7.12
+          SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          archive=actionlint_${VERSION}_linux_amd64.tar.gz
+          curl -fsSLo "$RUNNER_TEMP/$archive" "https://github.com/rhysd/actionlint/releases/download/v$VERSION/$archive"
+          echo "$SHA256  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" actionlint
+          # Structure, expressions, and action inputs; shell scripts are not linted.
+          "$RUNNER_TEMP/actionlint" -color -shellcheck= -pyflakes=
+      - name: The plugin's version is the release version
+        # Claude Code refreshes its cached plugin only when the version changes.
+        run: .github/scripts/check-versions.sh
+
+  test:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS minutes cost ten times Linux minutes: Linux runs on every
+        # push, macOS (Apple silicon) on main, on pull requests, and for releases.
+        os: ${{ fromJSON((github.ref == 'refs/heads/main' || github.event_name == 'pull_request' || inputs.all-platforms) && '["ubuntu-24.04", "macos-15"]' || '["ubuntu-24.04"]') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-10-16
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+      - name: Use OpenSSL 3 on macOS
+        # The compatibility suite makes its test certificates with OpenSSL 3
+        # features; the system openssl on macOS is LibreSSL.
+        if: runner.os == 'macOS'
+        run: |
+          prefix=$(brew --prefix openssl@3)
+          [ -x "$prefix/bin/openssl" ] || brew install openssl@3
+          echo "$prefix/bin" >> "$GITHUB_PATH"
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: |
+          cargo clippy --all-targets -- -D warnings
+          cargo clippy --all-targets --features fault-injection -- -D warnings
+      - name: Tests
+        run: |
+          openssl version
+          cargo test
+      - name: Release build
+        run: cargo build --release --locked
+      - name: Compatibility suite
+        run: python3 -B compat/run.py --bin target/release/switchboard
+      - name: Forced panics (release profile), server and terminal
+        run: cargo test --release --locked --features fault-injection --test server_panic --test terminal
+      - name: install.sh against a fake release
+        run: .github/scripts/install-sh-test.sh target/release/switchboard
+
+  server-install:
+    name: server install (Linux, root, static musl build)
+    # Builds the Linux release artifact (static, musl, as release.yml does)
+    # and installs it system-wide on the disposable runner: the account,
+    # directories, unit, and service in each listener mode, then enrolls the
+    # first machine with the printed invite, exercises the invite and
+    # machine commands, server status and logs, and uninstalls (with and
+    # without --purge).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-10-16
+        with:
+          toolchain: stable
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+      - name: Install Zig and cargo-zigbuild
+        run: python3 -m pip install --disable-pip-version-check ziglang==0.17.0 cargo-zigbuild==0.24.0
+      - name: Release build (x86_64-unknown-linux-musl)
+        run: |
+          cargo zigbuild --release --locked --target x86_64-unknown-linux-musl
+          file target/x86_64-unknown-linux-musl/release/switchboard | tee /dev/stderr | grep -q 'statically linked'
+      - name: Server install end to end
+        run: .github/scripts/server-install-test.sh target/x86_64-unknown-linux-musl/release/switchboard
