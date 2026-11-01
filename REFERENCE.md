@@ -69,11 +69,11 @@ Joining:
 | `--owner NAME` | Who the machine belongs to (default: your user name) |
 | `--plugin` / `--no-plugin` | Install the Claude Code plugin, or don't. Without a terminal the default is not to |
 | `--no-start` | Don't install or start the bridge |
+| `--replace` | Join the invite's server even if this machine is set up for another; the current setup is moved to `~/.config/switchboard.before-TIME` and put back if joining fails |
 
 On a machine taken down with `switchboard down`, `setup` installs the bridge's service but
 neither starts it nor lets it start at login; it answers `"down": true`, and `switchboard up`
 brings the machine back.
-| `--replace` | Join the invite's server even if this machine is set up for another; the current setup is moved to `~/.config/switchboard.before-TIME` and put back if joining fails |
 
 Running the server (Linux with systemd; the install runs once through `sudo`):
 
