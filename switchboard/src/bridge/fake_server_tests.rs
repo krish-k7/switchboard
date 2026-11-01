@@ -1904,6 +1904,20 @@ fn network_churn_and_local_errors_cannot_defeat_or_stall_the_backoff() {
     *f.clock.lock().unwrap() = now + NETWORK_RETRY_INTERVAL;
     f.bridge.handle(Event::Network).unwrap();
     assert!(f.bridge.reconnect_at - (now + NETWORK_RETRY_INTERVAL) <= 1.0);
+    // A network change while an attempt is due (or under way) still resets
+    // the backoff, so that attempt failing doesn't wait 30 to 60 seconds.
+    for _ in 0..6 {
+        f.retry();
+    }
+    let now = *f.clock.lock().unwrap() + 2.0 * NETWORK_RETRY_INTERVAL;
+    *f.clock.lock().unwrap() = f.bridge.reconnect_at.max(now);
+    f.bridge.registration_inflight = Some((f.bridge.generation, uuid4_hex(), "register"));
+    f.bridge.handle(Event::Network).unwrap();
+    f.bridge.registration_inflight = None;
+    assert!(f.bridge.reset_backoff_on_failure);
+    let now = f.bridge.schedule_reconnect() - f.bridge.reconnect_at;
+    assert_eq!(now, 0.0);
+    assert!(f.bridge.reconnect_at - *f.clock.lock().unwrap() <= backoff::FIRST);
     // A local error backs reconciliation off, but a file change brings the
     // next look within 2 seconds.
     f.bridge.retry_at = now + 60.0;

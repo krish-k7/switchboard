@@ -595,6 +595,10 @@ pub struct Bridge {
     network: Option<netwatch::NetWatcher>,
     /// No network-change retry before this.
     network_retry_after: f64,
+    /// The network changed during a registration attempt.
+    reset_backoff_on_failure: bool,
+    /// No network watcher restart before this.
+    network_restart_after: f64,
     pending: IndexMap<Tag, Meta>,
     registration_inflight: Option<Tag>,
     desired_sessions: Option<Vec<Value>>,
@@ -793,6 +797,8 @@ impl Bridge {
             reconnect: backoff::Backoff::default(),
             network: None,
             network_retry_after: 0.0,
+            reset_backoff_on_failure: false,
+            network_restart_after: 0.0,
             pending: IndexMap::new(),
             registration_inflight: None,
             desired_sessions: None,
@@ -904,6 +910,9 @@ impl Bridge {
     /// After a failed attempt to reach the server: when to try again. Local
     /// discovery still runs at least every 30 seconds meanwhile.
     fn schedule_reconnect(&mut self) -> f64 {
+        if std::mem::take(&mut self.reset_backoff_on_failure) {
+            self.reconnect.reset();
+        }
         let now = self.now();
         let at = now + self.reconnect.next_delay();
         self.reconnect_at = at;
@@ -1213,6 +1222,12 @@ impl Bridge {
         if self.network.as_ref().is_some_and(|n| n.healthy()) {
             return;
         }
+        // A watcher that stopped is restarted at most once a minute.
+        let now = self.now();
+        if self.network.is_some() && now < self.network_restart_after {
+            return;
+        }
+        self.network_restart_after = now + 60.0;
         let hint = self.shared.clone();
         self.network = netwatch::NetWatcher::new(Arc::new(move || hint.network_hint()));
     }
@@ -2303,10 +2318,13 @@ impl Bridge {
                 // network that keeps changing cannot defeat the backoff.
                 let now = self.now();
                 if !self.online && now >= self.network_retry_after {
+                    self.network_retry_after = now + NETWORK_RETRY_INTERVAL;
+                    self.reconnect.reset();
+                    // An attempt already under way started on the old network:
+                    // if it fails, the backoff starts afresh.
+                    self.reset_backoff_on_failure = self.registration_inflight.is_some();
                     let soon = now + 1.0;
                     if self.reconnect_at > soon {
-                        self.network_retry_after = now + NETWORK_RETRY_INTERVAL;
-                        self.reconnect.reset();
                         self.reconnect_at = soon;
                         self.retry_at = self.retry_at.min(soon);
                         self.next_scan = self.next_scan.min(soon);
