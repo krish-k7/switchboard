@@ -433,7 +433,7 @@ pub fn run_checks(config_path: &str) -> Map<String, Value> {
         Ok((0, _, _)) => checks.add(
             "chats",
             "pass",
-            "No chats joined yet. To connect one, run `/switchboard join` in it.",
+            "No chats joined yet. To connect one, run `!switchboard join` in it, or `/switchboard join` with the Claude Code plugin.",
             None,
         ),
         Ok((joined, open, live)) if live == open => {

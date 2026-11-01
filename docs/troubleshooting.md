@@ -243,7 +243,8 @@ Never turn certificate checking off; there is no option for it.
   polling, give it a few seconds.
 - **`switchboard join` from a terminal** answers
   `switchboard join connects the chat it runs in, and this is a terminal.` Run `/switchboard join`
-  (or `!switchboard join`) inside the chat, or pass the chat's ID:
+  (with the plugin) or `!switchboard join` inside the chat (the message names the one that fits
+  this machine), or pass the chat's ID:
   `switchboard join --chat ID`, with the ID from `switchboard chats`.
 - **`Joined as <name>, but not live yet.`** The chat is joined, but the bridge hasn't published it
   yet, usually because the bridge isn't running or isn't connected. The line below says which.
@@ -285,7 +286,8 @@ one message written by Switchboard on its own machine, not by the other chat. It
 happened:
 
 - `Your message to <chat> was not delivered: this chat hasn't joined Switchboard.` The sending
-  chat isn't joined. Run `/switchboard join` in it and send again.
+  chat isn't joined. Run `/switchboard join` (or, without the plugin, `!switchboard join`) in it and
+  send again.
 - `Your message to <chat> was not delivered (<reason>).` The server or the other machine refused
   it, for example because that chat left or its machine went offline.
 - `Switchboard couldn't confirm that your message to <chat> arrived (<reason>); it may or may not

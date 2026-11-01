@@ -231,7 +231,8 @@ pub fn problem_for(message: &str, fix: Option<&str>, command: &str) -> ui::promp
             "`switchboard {other}` {verb} the chat it runs in, and this is a terminal."
         ))
         .fix(format!(
-            "run `/switchboard {other}` inside the chat, or pick a chat from `switchboard chats` and run `switchboard {other} --chat ID`."
+            "run `{}` inside the chat, or pick a chat from `switchboard chats` and run `switchboard {other} --chat ID`.",
+            init::chat_command_here(other)
         ));
     }
     if let Some(rest) = message.strip_prefix(local::NO_SUCH_CHAT) {
@@ -1033,12 +1034,23 @@ fn run(args: &Args, join_name: Option<String>) -> Result<i32, Error> {
                 }
                 Err(error) => return Err(error),
             }
-            doc = view::status(
+            // The plugin's display always has the plugin; a terminal's
+            // answer names the join command that works on this machine
+            // (plain JSON shows no answer, so it asks nothing).
+            let join = || {
+                if args.display || args.json {
+                    "/switchboard join".to_string()
+                } else {
+                    init::join_command_here()
+                }
+            };
+            doc = view::status_for(
                 &result,
                 current.as_deref(),
                 None,
                 service::supported() && !service::installed(),
                 crate::fmtutil::time_now(),
+                &join,
             );
         }
     }

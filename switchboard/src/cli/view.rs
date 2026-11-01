@@ -212,13 +212,30 @@ fn host(result: &Map<String, Value>) -> String {
 ///
 /// `current`: this chat's ID, when the command runs in a chat (or is given
 /// one). `update`: a newer release. `service_missing`: the bridge's service
-/// file isn't installed.
+/// file isn't installed. This is what the plugin shows, so a chat is told
+/// to run `/switchboard join`; the terminal's `status` names the command
+/// that fits this machine (`status_for`).
 pub fn status(
     result: &Map<String, Value>,
     current: Option<&str>,
     update: Option<&str>,
     service_missing: bool,
     now: f64,
+) -> Doc {
+    status_for(result, current, update, service_missing, now, &|| {
+        "/switchboard join".into()
+    })
+}
+
+/// `status`, with `join` giving the command that joins a chat, asked only
+/// when the answer suggests it.
+pub fn status_for(
+    result: &Map<String, Value>,
+    current: Option<&str>,
+    update: Option<&str>,
+    service_missing: bool,
+    now: f64,
+    join: &dyn Fn() -> String,
 ) -> Doc {
     let rows = rows_of(result, "sessions");
     let enabled = truthy(result.get("enabled"));
@@ -292,7 +309,7 @@ pub fn status(
                     format!("Joined as {}, {expires}", joined_name(row))
                 }
             }
-            Some(_) => "Not joined. Run /switchboard join.".into(),
+            Some(_) => format!("Not joined. Run {}.", join()),
             None => "Not found on this machine".into(),
         };
         doc.push(fact("This chat", &value));
@@ -306,10 +323,7 @@ pub fn status(
         doc.push(update_block(version));
     }
     if step.is_none() && connected && current.is_none() && joined == 0 {
-        step = Some(next(
-            "To connect a chat, run this in it:",
-            "/switchboard join",
-        ));
+        step = Some(next("To connect a chat, run this in it:", &join()));
     }
     doc.extend(step);
     doc

@@ -317,7 +317,7 @@ pub fn run(
             ui.blank();
             if enrolled && connected {
                 ui.say("Everything is set up.", Tone::Strong);
-                connect_chats(ui);
+                connect_chats(ui, has_plugin == Some(true));
             } else {
                 ui.say("Nothing was changed.", Tone::Strong);
                 ui.heading("Next");
@@ -340,7 +340,7 @@ pub fn run(
             ui.blank();
             if connected {
                 ui.say("Done. The bridge is running and connected.", Tone::Strong);
-                connect_chats(ui);
+                connect_chats(ui, has_plugin == Some(true));
             } else if started {
                 ui.say(
                     "Almost done. The bridge is running but not connected yet.",
@@ -579,10 +579,14 @@ fn leave(
     Ok(())
 }
 
-/// What to do next once this machine is connected.
-fn connect_chats(ui: &mut Ui) {
+/// What to do next once this machine is connected: the join command with
+/// the plugin, or `!switchboard join` without it.
+fn connect_chats(ui: &mut Ui, plugin: bool) {
     ui.heading("Next");
-    ui.steps(&["In each Claude Code chat you want connected, run\n`/switchboard join`".into()]);
+    ui.steps(&[format!(
+        "In each Claude Code chat you want connected, run\n`{}`",
+        super::join_command(plugin)
+    )]);
 }
 
 /// Move the current setup aside, join the new server, and put the old

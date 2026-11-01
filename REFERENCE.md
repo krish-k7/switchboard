@@ -113,7 +113,12 @@ joined and when it expires, and how many chats here are joined:
 The `This chat` row appears inside a chat (found through `CLAUDE_CODE_MESSAGING_SOCKET`) or with
 `--chat ID`. A machine taken down says `Down. Run switchboard up to reconnect.`; one that isn't
 set up says `Not set up. Run switchboard init.` and exits 1. When a newer release exists, a line
-says `Switchboard 0.3.1 is available. Run switchboard upgrade.` (see `SWITCHBOARD_NO_UPDATE_CHECK`).
+says `Switchboard 0.3.2 is available. Run switchboard upgrade.` (see `SWITCHBOARD_NO_UPDATE_CHECK`).
+Where it says how to join a chat, it names the command that works here: `/switchboard join` when
+Claude Code lists the Switchboard plugin (asked with `claude plugin list`, as init asks), else
+`!switchboard join` (`!~/.local/bin/switchboard join` while `~/.local/bin` isn't on `PATH`). With
+`--display` (the plugin's request) it always says `/switchboard join`, and plain `--json` asks
+nothing.
 At most one next step follows.
 
 With `--json`: `enabled`, `server_url`, `sessions` (the chats open on this machine),
@@ -337,7 +342,8 @@ blocks, each with a `kind`: `title` (`text`, optional `tone`: `success`, `warnin
 `heading`, `fact` (`label`, `value`), `text` (optional `tone`, `strong`), `next` (`text` and a
 `command` to run), `code`, `item` (a check: `text`, `tone`, optional `fix`), and `table`
 (`columns`, `rows` of `cells` with an optional `note`); any block may have `space: true`.
-Commands in text are in backticks.
+Commands in text are in backticks. A display made for the plugin assumes the plugin, so its join
+hints say `/switchboard join`; the terminal's says what fits the machine (see `status`).
 
 ## Environment
 

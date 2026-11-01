@@ -1997,3 +1997,66 @@ fn a_downgrade_before_031_clears_the_new_layout_for_the_older_installer() {
     assert!(home.join(".local/bin/switchboard").is_file());
     assert!(env.service_file(false).exists());
 }
+
+/// `status` on a connected machine with no chats joined says how to join
+/// one: `/switchboard join` where Claude Code has the plugin, the `!`
+/// command where it doesn't; the plugin's own display always has the
+/// plugin, and plain JSON asks nothing.
+#[test]
+fn status_suggests_the_join_command_that_works_here() {
+    let mut env = Env::new();
+    let config = write_full_config(&env);
+    let state = config.parent().unwrap().join("state");
+    let pid = std::process::id();
+    let runtime = state.join("runtime.json");
+    std::fs::write(
+        &runtime,
+        json!({"pid": pid, "procStart": switchboard::identity::process_start(pid as i64).unwrap(),
+               "connected": true, "machine": "desk"})
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let hint = |env: &Env| {
+        let text = stdout(&env.run(&["cli", "status"]));
+        assert!(
+            text.starts_with("✓ Connected to sb.example.com as desk"),
+            "{text}"
+        );
+        text.rsplit("To connect a chat, run this in it:\n")
+            .next()
+            .unwrap()
+            .trim()
+            .to_string()
+    };
+    // No Claude Code on PATH: no plugin, and switchboard isn't on PATH.
+    assert_eq!(hint(&env), "!~/.local/bin/switchboard join");
+    let local_bin = env.home().join(".local/bin");
+    env.vars.push((
+        "PATH".into(),
+        format!(
+            "{}:{}:/usr/bin:/bin",
+            env.root.join("bin").display(),
+            local_bin.display()
+        ),
+    ));
+    assert_eq!(hint(&env), "!switchboard join");
+    fake_claude(&env, None);
+    assert_eq!(hint(&env), "!switchboard join");
+    fake_claude(&env, Some("fail"));
+    assert_eq!(hint(&env), "!switchboard join");
+    fake_claude(&env, Some("0.3.1"));
+    assert_eq!(hint(&env), "/switchboard join");
+    // The plugin's display and plain JSON don't ask Claude Code.
+    fake_claude(&env, None);
+    env.clear_calls();
+    let display = json_out(&env.run(&["cli", "status", "--json", "--display"]));
+    assert!(
+        display["display"]
+            .to_string()
+            .contains("\"/switchboard join\""),
+        "{display}"
+    );
+    json_out(&env.run(&["cli", "status", "--json"]));
+    assert!(!env.calls().contains("claude"), "{}", env.calls());
+}

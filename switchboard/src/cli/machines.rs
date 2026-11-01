@@ -1163,7 +1163,7 @@ pub fn command(args: &Args) -> i32 {
                 } else {
                     vec![
                         "Start the bridge with\n`switchboard up`".into(),
-                        "Connect chats with\n`/switchboard join`".into(),
+                        format!("Connect chats with\n`{}`", super::init::join_command_here()),
                     ]
                 };
                 lines.extend(super::ui::steps(&theme, &next, width));

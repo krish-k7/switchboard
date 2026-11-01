@@ -318,9 +318,11 @@ class JoinLeave(CLICase):
         self.assertJSONError(['join'], 1, "this isn't a Claude Code chat; run it inside the chat, or pass --chat with "
                                           "a chat's ID (from switchboard chats)")
         human = self.cli.run('join')
+        # Without the plugin (no Claude Code here), the ! command, by its path
+        # while ~/.local/bin isn't on PATH.
         self.assertEqual(human.stderr, '✗ switchboard join connects the chat it runs in, and this is a terminal.\n'
-                                       '  To fix, run /switchboard join inside the chat, or pick a chat from\n'
-                                       '  switchboard chats and run\n'
+                                       '  To fix, run !~/.local/bin/switchboard join inside the chat, or pick a chat\n'
+                                       '  from switchboard chats and run\n'
                                        '      switchboard join --chat ID\n')
         for chat in (str(uuid.uuid4()), 'nope'):
             for option in ('--session', '--chat'):
@@ -525,7 +527,8 @@ class Doctor(CLICase):
         self.cli.write_config(dict(self.cli.config, sessions=[]))
         self.assertEqual(self.run_json('doctor')['checks'][-1],
                          dict(name='chats', status='pass',
-                              summary='No chats joined yet. To connect one, run /switchboard join in it.'))
+                              summary='No chats joined yet. To connect one, run !switchboard join in it, or /switchboard join '
+                                      'with the Claude Code plugin.'))
         human = self.cli.run('doctor')
         self.assertTrue(human.stdout.endswith('\n  1 warning.\n'), human.stdout)
 
@@ -571,7 +574,8 @@ class Doctor(CLICase):
                                                   summary='Chats are found by polling, so new chats can take a few '
                                                           'seconds to appear.'))
         self.assertEqual(names['chats'], dict(name='chats', status='pass',
-                                              summary='No chats joined yet. To connect one, run /switchboard join in it.'))
+                                              summary='No chats joined yet. To connect one, run !switchboard join in it, or /switchboard join '
+                                      'with the Claude Code plugin.'))
         self.assertEqual(names['configuration'], dict(name='configuration', status='fail',
                                                       summary="This machine's key or certificate is unsafe or invalid, "
                                                               "or the two don't match.",

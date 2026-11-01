@@ -861,18 +861,37 @@ pub(crate) fn command_on_path() -> bool {
 }
 
 /// The command a chat runs to join, with or without the plugin.
-fn join_command(plugin: bool) -> String {
+pub(crate) fn join_command(plugin: bool) -> String {
+    chat_command(plugin, "join")
+}
+
+/// The command a chat runs for `verb` (join or leave): `/switchboard VERB`
+/// with the plugin, else `!switchboard VERB` (by its path when it isn't on
+/// PATH).
+pub(crate) fn chat_command(plugin: bool, verb: &str) -> String {
     if plugin {
-        "/switchboard join".into()
-    } else if command_on_path() {
-        "!switchboard join".into()
+        format!("/switchboard {verb}")
     } else {
-        "!~/.local/bin/switchboard join".into()
+        format!("!{} {verb}", switchboard())
     }
 }
 
+/// `chat_command`, by whether Claude Code has the plugin (asked as init
+/// asks). Without Claude Code, or when it can't tell, the `!` command,
+/// which works either way.
+pub(crate) fn chat_command_here(verb: &str) -> String {
+    let plugin =
+        plugin::claude_path().is_some_and(|claude| plugin::installed(&claude).unwrap_or(false));
+    chat_command(plugin, verb)
+}
+
+/// `chat_command_here` for joining.
+pub(crate) fn join_command_here() -> String {
+    chat_command_here("join")
+}
+
 /// `switchboard` as a person types it here.
-fn switchboard() -> &'static str {
+pub(crate) fn switchboard() -> &'static str {
     if command_on_path() {
         "switchboard"
     } else {
