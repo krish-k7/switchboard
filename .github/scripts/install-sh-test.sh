@@ -63,6 +63,18 @@ esac
 EOF
     chmod 700 "$work/bin/$tool"
 done
+# Nothing here may reach the real Claude Code, sudo, or clipboard. The fake
+# claude lists the plugins in $work/claude-plugins (none without the file).
+for tool in sudo pbcopy; do
+    printf '#!/bin/sh\necho "%s is faked in this test" >&2\nexit 1\n' "$tool" > "$work/bin/$tool"
+    chmod 700 "$work/bin/$tool"
+done
+cat > "$work/bin/claude" <<EOF
+#!/bin/sh
+[ "\$*" = "plugin list --json" ] || { echo "claude is faked in this test" >&2; exit 1; }
+cat "$work/claude-plugins" 2>/dev/null || echo '[]'
+EOF
+chmod 700 "$work/bin/claude"
 # curl, wrapped to record its arguments (where other users could see a token
 # in ps) and the mode of any config file it is given.
 real_curl=$(PATH=/usr/bin:/bin command -v curl)
@@ -98,7 +110,7 @@ run() {  # run SHELL [VAR=VALUE...] [-- INIT-OPTIONS]: install.sh as `curl | sh`
         SWITCHBOARD_GITHUB="http://127.0.0.1:$port" SWITCHBOARD_GITHUB_API="http://127.0.0.1:$port/api" \
         ${variables[@]+"${variables[@]}"} "$shell" -s -- "$@" < "$root/install.sh"
 }
-installed=$work/home/.local/share/switchboard/switchboard
+installed=$work/home/.local/bin/switchboard
 if [[ $os == darwin ]]; then service=$work/home/Library/LaunchAgents/dev.switchboard.bridge.plist
 else service=$work/home/.config/systemd/user/switchboard-bridge.service; fi
 
@@ -109,7 +121,10 @@ for shell in "${shells[@]}"; do
     rm -rf "$work/home" && mkdir "$work/home"
     run "$shell" | tee "$work/out"
     cmp "$installed" "$binary" || fail "installed binary differs"
-    [[ -x $work/home/bin/switchboard && -f $service ]] || fail "command or service missing"
+    [[ -x $installed && ! -L $installed && -f $service ]] || fail "command or service missing"
+    [[ ! -e $work/home/bin && ! -e $work/home/.local/share/switchboard/switchboard ]] || fail "a wrapper or second copy was installed"
+    grep -q "$installed" "$service" || fail "the service doesn't run the command"
+    grep -q '^✓ Installed the switchboard command in ~/.local/bin$' "$work/out" || { cat "$work/out"; fail "no install line"; }
     grep -q 'switchboard init' "$work/out" || { cat "$work/out"; fail "no next steps"; }
     # Not a terminal: no title, no spinner, no color or cursor codes.
     if grep -q "$(printf '[\033\r]')" "$work/out"; then cat -v "$work/out"; fail "control codes without a terminal"; fi
@@ -151,11 +166,70 @@ step "a checksum mismatch installs nothing"
 before=$(sha "$installed")
 cp "$work/release/SHA256SUMS" "$work/sums"
 printf '%s  %s\n' "$(printf tampered | sha /dev/stdin)" "$asset" > "$work/release/SHA256SUMS"
-rm -rf "$work/home/bin"
+rm -f "$service"
 if run sh 2>"$work/err"; then fail "installed despite a checksum mismatch"; fi
 grep -q "does not match the release's checksum" "$work/err" || { cat "$work/err"; fail "wrong message"; }
-[[ $(sha "$installed") == "$before" && ! -e $work/home/bin ]] || fail "changed files despite the mismatch"
+[[ $(sha "$installed") == "$before" && ! -e $service ]] || fail "changed files despite the mismatch"
 cp "$work/sums" "$work/release/SHA256SUMS"
+
+# An installation as 0.3.0 left it (after Python releases): the program in
+# ~/.local/share/switchboard, the ~/bin wrapper, the ~/.local/bin link to it,
+# Python modules, and a file of the user's beside them.
+write_030() {
+    local share=$work/home/.local/share/switchboard
+    rm -rf "$work/home" && mkdir -p "$work/home/bin" "$work/home/.local/bin" "$share/__pycache__"
+    echo 1 > "$share/.switchboard-install"
+    { cat "$binary"; echo 0.3.0 copy; } > "$share/switchboard"
+    chmod 700 "$share/switchboard"
+    printf '#!/bin/sh\n# Managed by switchboard install\nexec %s cli "$@"\n' "$share/switchboard" > "$work/home/bin/switchboard"
+    chmod 700 "$work/home/bin/switchboard"
+    ln -s "$work/home/bin/switchboard" "$work/home/.local/bin/switchboard"
+    echo '# python' > "$share/bridge.py"
+    echo pyc > "$share/__pycache__/bridge.cpython-312.pyc"
+    echo mine > "$share/notes.txt"
+}
+for shell in "${shells[@]}"; do
+    step "$shell: an installation from before 0.3.1 moves to ~/.local/bin"
+    write_030
+    run "$shell" > "$work/out"
+    [[ -f $installed && ! -L $installed ]] || fail "$shell: the old link is still the command"
+    cmp "$installed" "$binary" || fail "$shell: installed binary differs (move)"
+    for old in "$work/home/bin/switchboard" "$work/home/.local/share/switchboard/switchboard" \
+        "$work/home/.local/share/switchboard/bridge.py" "$work/home/.local/share/switchboard/__pycache__"; do
+        [[ ! -e $old && ! -L $old ]] || fail "$shell: $old is left"
+    done
+    [[ $(cat "$work/home/.local/share/switchboard/notes.txt") == mine ]] || fail "$shell: removed a file of the user's"
+    grep -q '^✓ Removed what earlier versions installed in ~/bin and ~/.local/share/switchboard$' "$work/out" ||
+        { cat "$work/out"; fail "$shell: the move was not reported"; }
+    grep -q "$installed" "$service" || fail "$shell: the service doesn't run the command"
+    # It only asked whether the bridge runs (to know the old copy is unused).
+    if [[ -e $work/service-calls ]] && grep -Ev ' (print|is-active) ' "$work/service-calls"; then
+        fail "$shell: moving the installation did more than ask the service manager"
+    fi
+    rm -f "$work/service-calls"
+
+    step "$shell: a Claude Code plugin before 0.3.1 keeps ~/bin/switchboard as a link to the command"
+    write_030
+    echo '[{"id": "switchboard@switchboard", "version": "0.3.0"}]' > "$work/claude-plugins"
+    run "$shell" > "$work/out"
+    rm "$work/claude-plugins"
+    [[ $(readlink "$work/home/bin/switchboard") == "$installed" ]] || fail "$shell: no link for the older plugin"
+    grep -q '^! Kept ~/bin/switchboard as a link to the command' "$work/out" ||
+        { cat "$work/out"; fail "$shell: the link was not explained"; }
+    grep -q 'claude plugin marketplace update switchboard' "$work/out" ||
+        { cat "$work/out"; fail "$shell: no plugin update hint"; }
+    run "$shell" > "$work/out"
+    [[ ! -e $work/home/bin/switchboard && ! -L $work/home/bin/switchboard ]] || fail "$shell: the link outlived the old plugin"
+
+    step "$shell: a ~/bin/switchboard Switchboard didn't write is left alone"
+    write_030
+    echo 'echo mine' > "$work/home/bin/switchboard"
+    run "$shell" > "$work/out"
+    [[ $(cat "$work/home/bin/switchboard") == 'echo mine' ]] || fail "$shell: changed a foreign ~/bin/switchboard"
+    grep -q "^! Left ~/bin/switchboard alone: Switchboard didn't write it$" "$work/out" ||
+        { cat "$work/out"; fail "$shell: not told about the foreign command"; }
+done
+rm -rf "$work/home" "$work/service-calls" && mkdir "$work/home"
 
 step "an invite in the environment runs init without a terminal, with the options given"
 rm -rf "$work/home" && mkdir "$work/home"

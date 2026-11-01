@@ -861,7 +861,7 @@ pub fn run_capture(argv: &[String], timeout: f64, capture: bool) -> Result<(i32,
 /// Install and start the local bridge after enrolling.
 pub fn start_bridge(say: &dyn Fn(&str)) -> Result<bool> {
     let home = super::local::home_dir();
-    let command = format!("{home}/bin/switchboard");
+    let command = super::install::paths(&home).program;
     if !super::service::supported() {
         let binary = std::env::current_exe()
             .map(|p| p.to_string_lossy().into_owned())

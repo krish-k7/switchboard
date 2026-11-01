@@ -743,7 +743,7 @@ export default {
         "The bridge isn't running.",
         "Run `switchboard up`.",
         "Chats are found by polling, so new chats can take a few seconds to appear.",
-        "Switchboard 0.3.0, installed in ~/bin.",
+        "Switchboard 0.3.0, installed in ~/.local/bin.",
         "Configuration and key are private and valid.",
         "The server knows this machine as laptop (owner k).",
         "1 problem to fix, and 1 warning."
@@ -763,7 +763,7 @@ export default {
         },
         {
           "kind": "item",
-          "text": "Switchboard 0.3.0, installed in ~/bin.",
+          "text": "Switchboard 0.3.0, installed in ~/.local/bin.",
           "tone": "success",
           "space": true
         },
@@ -788,7 +788,7 @@ export default {
     {
       "name": "doctor-all-passed",
       "words": [
-        "Switchboard 0.3.0, installed in ~/bin.",
+        "Switchboard 0.3.0, installed in ~/.local/bin.",
         "Configuration and key are private and valid.",
         "The bridge is running and connected.",
         "The server knows this machine as laptop (owner k).",
@@ -797,7 +797,7 @@ export default {
       "display": [
         {
           "kind": "item",
-          "text": "Switchboard 0.3.0, installed in ~/bin.",
+          "text": "Switchboard 0.3.0, installed in ~/.local/bin.",
           "tone": "success"
         },
         {
@@ -827,7 +827,7 @@ export default {
       "name": "doctor-down",
       "words": [
         "Down. Run `switchboard up` to reconnect.",
-        "Switchboard 0.3.0, installed in ~/bin.",
+        "Switchboard 0.3.0, installed in ~/.local/bin.",
         "Configuration and key are private and valid.",
         "The server knows this machine as laptop (owner k).",
         "All checks passed."
@@ -839,7 +839,7 @@ export default {
         },
         {
           "kind": "item",
-          "text": "Switchboard 0.3.0, installed in ~/bin.",
+          "text": "Switchboard 0.3.0, installed in ~/.local/bin.",
           "tone": "success",
           "space": true
         },

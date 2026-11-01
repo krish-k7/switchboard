@@ -1,8 +1,10 @@
-//! The installer: copies this binary into `~/.local/share/switchboard`,
-//! writes the `~/bin/switchboard` command and its `~/.local/bin` link, and
-//! installs the user service (a launchd agent on macOS, a systemd user unit
-//! on Linux). It keeps the paths, managed-file checks, backups, and log
-//! handling of early releases' installer, so any earlier installation
+//! The installer: puts this binary at `~/.local/bin/switchboard` (the
+//! command itself, no wrapper) and installs the user service that runs it
+//! (a launchd agent on macOS, a systemd user unit on Linux). The bridge's
+//! logs, the installer's backups, and the service's working directory are
+//! in `~/.local/share/switchboard`; the configuration stays in
+//! `~/.config/switchboard`. It keeps the managed-file checks, backups, and
+//! log handling of early releases' installer, so any earlier installation
 //! upgrades in place, and it moves a bridge service installed under the
 //! names earlier versions used (`service::LEGACY_LABEL`, `LEGACY_UNIT`):
 //! it stops that service if it is running, removes it, and starts the new
@@ -10,13 +12,25 @@
 //! given, never enrolls chats, and never edits Claude settings. A machine
 //! taken down with `switchboard down` stays down: the service isn't enabled
 //! or started, even with `--start`.
+//!
+//! Releases before 0.3.1 put the program in `~/.local/share/switchboard`,
+//! the command in `~/bin/switchboard` (a wrapper script), and a link to it
+//! in `~/.local/bin`; the Python releases before them also left their
+//! modules in `~/.local/share/switchboard`. Installing moves such an
+//! installation (`migrate`), touching only what an installer wrote: the
+//! wrapper (recognized by its marker line), the link, the old program copy
+//! (once no service runs it), the Python files by their exact names
+//! (`PYTHON_FILES`), and installer backups beyond the newest
+//! `KEEP_BACKUPS`. A `~/bin/switchboard` that is a Claude Code plugin's
+//! only way to the command (plugins before 0.3.1 run that path) becomes a
+//! link to the program instead, until that plugin is updated.
 
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
 use serde_json::{Map, Value};
 
 use crate::error::{Error, Result};
-use crate::fmtutil::{local_compact_stamp, shlex_quote, time_ns};
+use crate::fmtutil::{local_compact_stamp, time_ns};
 use crate::fsutil;
 
 pub const LABEL: &str = super::service::LABEL;
@@ -35,13 +49,52 @@ pub fn has_any_marker(text: &str) -> bool {
 
 /// The paths an installation owns, under one home directory.
 pub struct Paths {
+    /// `~/.local/share/switchboard`: the bridge's logs, the installer's
+    /// backups and marker, and the service's working directory.
     pub destination: String,
-    pub wrapper: String,
-    pub link: String,
+    /// `~/.local/bin/switchboard`: the program, which is the command.
+    pub program: String,
+    /// `~/bin/switchboard`: where releases before 0.3.1 wrote the command
+    /// (a wrapper script).
+    pub old_command: String,
+    /// `~/.local/share/switchboard/switchboard`: where releases before
+    /// 0.3.1 put the program.
+    pub old_program: String,
     pub service: String,
     pub wants: Option<String>,
     pub config: String,
 }
+
+/// Files the Python releases' installer copied into
+/// `~/.local/share/switchboard`: every name any of its versions wrote.
+pub const PYTHON_FILES: &[&str] = &[
+    "switchboard.py",
+    "bridge.py",
+    "native_peer.py",
+    "local_viewer.py",
+    "discovery_watch.py",
+    "hub_transport.py",
+    "hub_requests.py",
+    "doctor.py",
+    "session_metadata.py",
+    "roster_client.py",
+    "membership.py",
+    "ping_client.py",
+    "enroll.py",
+    "machines_client.py",
+];
+
+/// How many of the installer's backup folders are kept (the newest).
+pub const KEEP_BACKUPS: usize = 5;
+
+/// The first release that installs the program at `~/.local/bin/switchboard`
+/// (earlier ones keep it in `~/.local/share/switchboard`, with a `~/bin`
+/// command).
+pub const LOCAL_BIN_SINCE: &str = "0.3.1";
+
+/// The first plugin version that finds the command in `~/.local/bin`;
+/// older ones run `~/bin/switchboard`.
+pub const PLUGIN_FINDS_LOCAL_BIN: &str = "0.3.1";
 
 /// The systemd user unit directory (`$XDG_CONFIG_HOME/systemd/user`).
 fn unit_dir(home: &str) -> String {
@@ -99,9 +152,10 @@ pub fn paths(home: &str) -> Paths {
         )
     };
     Paths {
+        old_program: fsutil::join(&destination, BINARY),
         destination,
-        wrapper: fsutil::join(home, "bin/switchboard"),
-        link: fsutil::join(home, ".local/bin/switchboard"),
+        program: fsutil::join(home, ".local/bin/switchboard"),
+        old_command: fsutil::join(home, "bin/switchboard"),
         service,
         wants,
         config: fsutil::join(home, ".config/switchboard/bridge.json"),
@@ -221,6 +275,315 @@ pub fn links_to(link: &str, target: &str) -> bool {
     fsutil::is_symlink(link) && fsutil::resolve(link).ok() == fsutil::resolve(target).ok()
 }
 
+/// What is at `~/.local/bin/switchboard` or `~/bin/switchboard`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Found {
+    Absent,
+    /// A file an installer wrote: a Switchboard program or an earlier
+    /// release's wrapper script, both of which carry the marker text.
+    Ours,
+    /// A link an installer made: `~/.local/bin/switchboard` to the old
+    /// `~/bin/switchboard`, or `~/bin/switchboard` to the program.
+    OurLink,
+    /// Anything else, which is left alone.
+    Foreign,
+}
+
+/// Whether the regular file at `path` (this user's, not a link) holds the
+/// installer's marker: wrapper scripts have it as a line, and every
+/// Switchboard binary has the text built in. The size cap keeps a large
+/// foreign file from being read whole.
+pub fn carries_marker(path: &str) -> bool {
+    let Ok(info) = fsutil::lstat(path) else {
+        return false;
+    };
+    if !fsutil::is_type(&info, fsutil::S_IFREG)
+        || info.uid() != fsutil::getuid()
+        || info.len() > 256 << 20
+    {
+        return false;
+    }
+    let Ok(data) = std::fs::read(path) else {
+        return false;
+    };
+    [MARKER, LEGACY_MARKER].iter().any(|marker| {
+        data.windows(marker.len())
+            .any(|window| window == marker.as_bytes())
+    })
+}
+
+/// What is at the program's path, `~/.local/bin/switchboard`.
+pub fn program_state(p: &Paths) -> Found {
+    match fsutil::lstat(&p.program) {
+        Err(_) => Found::Absent,
+        Ok(info) if fsutil::is_type(&info, fsutil::S_IFLNK) => {
+            if links_to(&p.program, &p.old_command) {
+                Found::OurLink
+            } else {
+                Found::Foreign
+            }
+        }
+        Ok(_) if carries_marker(&p.program) => Found::Ours,
+        Ok(_) => Found::Foreign,
+    }
+}
+
+/// What is at the old command's path, `~/bin/switchboard`.
+pub fn old_command_state(p: &Paths) -> Found {
+    match fsutil::lstat(&p.old_command) {
+        Err(_) => Found::Absent,
+        Ok(info) if fsutil::is_type(&info, fsutil::S_IFLNK) => {
+            if fsutil::readlink(&p.old_command).ok().as_deref() == Some(p.program.as_str()) {
+                Found::OurLink
+            } else {
+                Found::Foreign
+            }
+        }
+        Ok(info) if fsutil::is_type(&info, fsutil::S_IFREG) => {
+            if read_text(&p.old_command).is_ok_and(|text| has_any_marker(&text)) {
+                Found::Ours
+            } else {
+                Found::Foreign
+            }
+        }
+        Ok(_) => Found::Foreign,
+    }
+}
+
+/// Whether two paths name the same directory entry's file, following
+/// links in the directories but not a final link: `~/bin` linked to
+/// `~/.local/bin` would make `~/bin/switchboard` the program itself, while
+/// a `~/bin/switchboard` link to the program is a file of its own.
+fn same_file(a: &str, b: &str) -> bool {
+    match (fsutil::lstat(a), fsutil::lstat(b)) {
+        (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
+        _ => false,
+    }
+}
+
+/// Whether the installation directory is the installer's own.
+fn managed_destination(p: &Paths) -> bool {
+    fsutil::lstat(&p.destination).is_ok_and(|info| fsutil::is_type(&info, fsutil::S_IFDIR))
+        && fsutil::lstat(&fsutil::join(&p.destination, ".switchboard-install"))
+            .is_ok_and(|info| fsutil::is_type(&info, fsutil::S_IFREG))
+}
+
+/// Remove the program copy releases before 0.3.1 kept in
+/// `~/.local/share/switchboard`. Only a regular file in the installer's own
+/// directory goes. Returns whether it was there.
+pub fn remove_old_program(p: &Paths) -> Result<bool> {
+    if !managed_destination(p)
+        || !fsutil::lstat(&p.old_program).is_ok_and(|info| fsutil::is_type(&info, fsutil::S_IFREG))
+    {
+        return Ok(false);
+    }
+    fsutil::unlink(&p.old_program)?;
+    Ok(true)
+}
+
+/// The bridge calls this as it starts. Started from the program's own path,
+/// it shows the service no longer runs the old copy, which goes now.
+pub fn finish_move() {
+    let Some(started_as) = std::env::args_os().next() else {
+        return;
+    };
+    let p = paths(&super::local::home_dir());
+    if started_as.to_string_lossy() == p.program.as_str() {
+        let _ = remove_old_program(&p);
+    }
+}
+
+/// Remove the Python releases' modules from the installer's directory, by
+/// their exact names, and the bytecode Python compiled from them (only
+/// `NAME.TAG.pyc` for those names, then `__pycache__` if that left it
+/// empty). Returns the paths removed.
+pub fn remove_python_files(p: &Paths) -> Result<Vec<String>> {
+    let mut removed = Vec::new();
+    if !managed_destination(p) {
+        return Ok(removed);
+    }
+    for name in PYTHON_FILES {
+        let path = fsutil::join(&p.destination, name);
+        if fsutil::lstat(&path).is_ok_and(|info| !info.is_dir()) {
+            fsutil::unlink(&path)?;
+            removed.push(path);
+        }
+    }
+    let cache = fsutil::join(&p.destination, "__pycache__");
+    if fsutil::lstat(&cache).is_ok_and(|info| fsutil::is_type(&info, fsutil::S_IFDIR)) {
+        let stems: Vec<&str> = PYTHON_FILES
+            .iter()
+            .map(|name| name.trim_end_matches(".py"))
+            .collect();
+        let compiled = |name: &str| {
+            name.ends_with(".pyc")
+                && stems.iter().any(|stem| {
+                    name.strip_prefix(stem)
+                        .and_then(|rest| rest.strip_prefix('.'))
+                        .is_some_and(|tag| {
+                            tag.bytes().all(|b| {
+                                b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_'
+                            })
+                        })
+                })
+        };
+        let entries = std::fs::read_dir(&cache)
+            .map_err(|exc| Error::from_io(&exc, Some(std::path::Path::new(&cache))))?;
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let path = fsutil::join(&cache, &name);
+            if compiled(&name) && fsutil::lstat(&path).is_ok_and(|info| !info.is_dir()) {
+                fsutil::unlink(&path)?;
+                removed.push(path);
+            }
+        }
+        if std::fs::remove_dir(&cache).is_ok() {
+            removed.push(cache);
+        }
+    }
+    Ok(removed)
+}
+
+/// Whether a backup folder's name is one the installer makes
+/// (`YYYYMMDDTHHMMSS-NANOSECONDS`).
+fn backup_name(name: &str) -> Option<(&str, u128)> {
+    let (stamp, nanos) = name.split_once('-')?;
+    let bytes = stamp.as_bytes();
+    let stamp_ok = bytes.len() == 15
+        && bytes[8] == b'T'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(at, b)| at == 8 || b.is_ascii_digit());
+    if !stamp_ok || nanos.is_empty() || !nanos.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((stamp, nanos.parse().ok()?))
+}
+
+/// Keep only the newest `KEEP_BACKUPS` of the installer's backup folders.
+/// Only folders named as the installer names them are counted or removed.
+/// Returns how many were removed.
+pub fn prune_backups(p: &Paths) -> Result<usize> {
+    let backups = fsutil::join(&p.destination, "backups");
+    if !managed_destination(p)
+        || !fsutil::lstat(&backups).is_ok_and(|info| fsutil::is_type(&info, fsutil::S_IFDIR))
+    {
+        return Ok(0);
+    }
+    let entries = std::fs::read_dir(&backups)
+        .map_err(|exc| Error::from_io(&exc, Some(std::path::Path::new(&backups))))?;
+    let mut folders: Vec<(String, u128, String)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let path = fsutil::join(&backups, &name);
+            let (stamp, nanos) = backup_name(&name)?;
+            fsutil::lstat(&path)
+                .is_ok_and(|info| fsutil::is_type(&info, fsutil::S_IFDIR))
+                .then(|| (stamp.to_string(), nanos, path))
+        })
+        .collect();
+    folders.sort();
+    let surplus = folders.len().saturating_sub(KEEP_BACKUPS);
+    for (_, _, path) in &folders[..surplus] {
+        std::fs::remove_dir_all(path)
+            .map_err(|exc| Error::from_io(&exc, Some(std::path::Path::new(path))))?;
+    }
+    Ok(surplus)
+}
+
+/// Whether Claude Code has a Switchboard plugin that only knows
+/// `~/bin/switchboard` (before `PLUGIN_FINDS_LOCAL_BIN`). Without Claude
+/// Code on PATH there is none to serve (init finds the plugin the same
+/// way); when Claude Code can't answer, it may have one.
+fn plugin_needs_old_command() -> bool {
+    let Some(claude) = super::init::plugin::claude_path() else {
+        return false;
+    };
+    super::init::plugin::installed_before(&claude, PLUGIN_FINDS_LOCAL_BIN).unwrap_or(true)
+}
+
+/// Make `~/bin/switchboard` a link to the program, replacing the wrapper
+/// there in one step.
+fn link_old_command(p: &Paths) -> Result<()> {
+    let temporary = fsutil::join(
+        &fsutil::parent(&p.old_command),
+        &format!(".switchboard-link-{}", std::process::id()),
+    );
+    let _ = fsutil::unlink(&temporary);
+    std::os::unix::fs::symlink(&p.program, &temporary)
+        .map_err(|exc| Error::from_io(&exc, Some(std::path::Path::new(&temporary))))?;
+    fsutil::replace(&temporary, &p.old_command).inspect_err(|_| {
+        let _ = fsutil::unlink(&temporary);
+    })
+}
+
+/// Move what releases before 0.3.1 left, once the program is in place and
+/// the service runs it: the old command (removed, or a link to the program
+/// while an older plugin needs it), the old link at the program's path is
+/// already replaced, the old program copy (unless a service still runs
+/// it), the Python modules, and backups beyond the newest few. Failures
+/// here never undo the install; they are reported.
+fn migrate(p: &Paths, result: &mut Map<String, Value>) {
+    let mut removed: Vec<Value> = Vec::new();
+    let mut problems: Vec<Value> = Vec::new();
+    let mut note = |what: &str, error: Error| {
+        problems.push(Value::from(format!("{what}: {}", error.message)));
+    };
+    match old_command_state(p) {
+        _ if same_file(&p.old_command, &p.program) => {}
+        Found::Ours | Found::OurLink if plugin_needs_old_command() => {
+            if old_command_state(p) == Found::Ours {
+                match link_old_command(p) {
+                    Ok(()) => {}
+                    Err(error) => note(&p.old_command, error),
+                }
+            }
+            result.insert("plugin_link".into(), Value::from(p.old_command.clone()));
+        }
+        Found::Ours | Found::OurLink => match fsutil::unlink(&p.old_command) {
+            Ok(()) => removed.push(Value::from(p.old_command.clone())),
+            Err(error) => note(&p.old_command, error),
+        },
+        Found::Foreign => {
+            result.insert("left".into(), Value::from(p.old_command.clone()));
+        }
+        Found::Absent => {}
+    }
+    if fsutil::lstat(&p.old_program).is_ok() {
+        if super::service::running() {
+            result.insert(
+                "old_program_kept".into(),
+                Value::from(p.old_program.clone()),
+            );
+        } else {
+            match remove_old_program(p) {
+                Ok(true) => removed.push(Value::from(p.old_program.clone())),
+                Ok(false) => {}
+                Err(error) => note(&p.old_program, error),
+            }
+        }
+    }
+    match remove_python_files(p) {
+        Ok(paths) => removed.extend(paths.into_iter().map(Value::from)),
+        Err(error) => note("the Python release's files", error),
+    }
+    match prune_backups(p) {
+        Ok(0) => {}
+        Ok(count) => {
+            result.insert("pruned_backups".into(), Value::from(count));
+        }
+        Err(error) => note("old backups", error),
+    }
+    if !removed.is_empty() {
+        result.insert("removed".into(), Value::Array(removed));
+    }
+    if !problems.is_empty() {
+        result.insert("cleanup_failed".into(), Value::Array(problems));
+    }
+}
+
 /// Install `binary_source` under `home`. When a bridge service installed
 /// under an earlier name was running, it is stopped and the result carries
 /// `"restart": true` for the caller to start the new service.
@@ -230,9 +593,9 @@ pub fn install(home: &str, binary_source: &str) -> Result<Map<String, Value>> {
     let legacy = legacy_paths(&home);
     // Only a legacy service file this installer wrote is moved; anything
     // else under that name is left alone.
-    let migrate = fsutil::lstat(&legacy.service).is_ok_and(|info| info.is_file())
+    let migrate_service = fsutil::lstat(&legacy.service).is_ok_and(|info| info.is_file())
         && managed_service(&legacy.service).unwrap_or(false);
-    for target in [&p.destination, &p.wrapper, &p.service] {
+    for target in [&p.destination, &p.service] {
         if fsutil::is_symlink(target) {
             return Err(Error::value(format!("refusing symlink: {target}")));
         }
@@ -246,8 +609,8 @@ pub fn install(home: &str, binary_source: &str) -> Result<Map<String, Value>> {
             p.destination
         )));
     }
-    if fsutil::exists(&p.wrapper) && !has_any_marker(&read_text(&p.wrapper)?) {
-        return Err(Error::value(format!("unmanaged command: {}", p.wrapper)));
+    if program_state(&p) == Found::Foreign {
+        return Err(Error::value(format!("unmanaged command: {}", p.program)));
     }
     if fsutil::exists(&p.service) && !managed_service(&p.service)? {
         let what = if cfg!(target_os = "linux") {
@@ -257,12 +620,8 @@ pub fn install(home: &str, binary_source: &str) -> Result<Map<String, Value>> {
         };
         return Err(Error::value(format!("{what}: {}", p.service)));
     }
-    let link_ok = links_to;
-    if fsutil::lstat(&p.link).is_ok() && !link_ok(&p.link, &p.wrapper) {
-        return Err(Error::value(format!("unmanaged command: {}", p.link)));
-    }
     if let Some(wants) = &p.wants {
-        if fsutil::lstat(wants).is_ok() && !link_ok(wants, &p.service) {
+        if fsutil::lstat(wants).is_ok() && !links_to(wants, &p.service) {
             return Err(Error::value(format!("unmanaged user service: {wants}")));
         }
     }
@@ -279,8 +638,7 @@ pub fn install(home: &str, binary_source: &str) -> Result<Map<String, Value>> {
     }
     let mut directories = vec![
         p.destination.clone(),
-        fsutil::parent(&p.wrapper),
-        fsutil::parent(&p.link),
+        fsutil::parent(&p.program),
         fsutil::parent(&p.service),
         fsutil::parent(&p.config),
     ];
@@ -303,6 +661,8 @@ pub fn install(home: &str, binary_source: &str) -> Result<Map<String, Value>> {
         &p.destination,
         &format!("backups/{}-{}", local_compact_stamp(), time_ns()),
     );
+    // Each file is written beside its place and renamed over it, so a
+    // running bridge keeps the program it started with until it restarts.
     let write = |path: &str, content: &[u8], mode: u32| -> Result<()> {
         if fsutil::exists(path) {
             fsutil::mkdir_parents(&backups, 0o700)?;
@@ -325,24 +685,14 @@ pub fn install(home: &str, binary_source: &str) -> Result<Map<String, Value>> {
         }
         result
     };
-    let installed = fsutil::join(&p.destination, BINARY);
     let binary = std::fs::read(binary_source)
         .map_err(|exc| Error::from_io(&exc, Some(std::path::Path::new(binary_source))))?;
-    write(&installed, &binary, 0o700)?;
+    write(&p.program, &binary, 0o700)?;
     write(
         &fsutil::join(&p.destination, ".switchboard-install"),
         b"1\n",
         0o600,
     )?;
-    let script = format!(
-        "#!/bin/sh\n{MARKER}\nexec {} cli \"$@\"\n",
-        shlex_quote(&installed)
-    );
-    write(&p.wrapper, script.as_bytes(), 0o700)?;
-    if fsutil::lstat(&p.link).is_err() {
-        std::os::unix::fs::symlink(&p.wrapper, &p.link)
-            .map_err(|exc| Error::from_io(&exc, Some(std::path::Path::new(&p.link))))?;
-    }
     // The service manager opens these before applying the child's umask.
     // Preserve existing contents and inode, even while a daemon writes them.
     for name in ["daemon.log", "daemon-error.log"] {
@@ -371,16 +721,16 @@ pub fn install(home: &str, binary_source: &str) -> Result<Map<String, Value>> {
     // login). If it cannot be retired, the new service file is not left
     // installed, and the error says what state the machine is in.
     let mut restart = false;
-    if migrate {
+    if migrate_service {
         restart = retire_legacy(&legacy, &backups).map_err(|failure| {
             let withdrawn = withdraw_service(&p, &backups);
             Error::value(format!("{failure}{withdrawn}"))
         })?;
     }
     let service = if cfg!(target_os = "linux") {
-        systemd_unit(&installed, &p.destination, &p.config)
+        systemd_unit(&p.program, &p.destination, &p.config)
     } else {
-        launch_agent(&installed, &p.destination, &p.config)
+        launch_agent(&p.program, &p.destination, &p.config)
     };
     // A machine taken down stays down: its service isn't enabled again.
     let down = super::service::is_down(&p.config);
@@ -394,7 +744,7 @@ pub fn install(home: &str, binary_source: &str) -> Result<Map<String, Value>> {
         Ok(())
     });
     if let Err(error) = placed {
-        if !migrate {
+        if !migrate_service {
             return Err(error);
         }
         return Err(Error::value(format!(
@@ -405,9 +755,11 @@ pub fn install(home: &str, binary_source: &str) -> Result<Map<String, Value>> {
         )));
     }
     let mut result = Map::new();
-    result.insert("command".into(), Value::from(p.wrapper.clone()));
-    result.insert("path_command".into(), Value::from(p.link.clone()));
-    result.insert("source".into(), Value::from(p.destination.clone()));
+    result.insert("command".into(), Value::from(p.program.clone()));
+    // The program's directory: releases before 0.3.1 restart the bridge
+    // after an upgrade with `source`/switchboard.
+    result.insert("source".into(), Value::from(fsutil::parent(&p.program)));
+    result.insert("data".into(), Value::from(p.destination.clone()));
     result.insert("config".into(), Value::from(p.config.clone()));
     let key = if cfg!(target_os = "linux") {
         "user_service"
@@ -415,9 +767,10 @@ pub fn install(home: &str, binary_source: &str) -> Result<Map<String, Value>> {
         "launch_agent"
     };
     result.insert(key.into(), Value::from(p.service.clone()));
-    if migrate {
+    if migrate_service {
         result.insert("migrated_from".into(), Value::from(legacy.service.clone()));
     }
+    migrate(&p, &mut result);
     result.insert("started".into(), Value::Bool(false));
     if down {
         result.insert("down".into(), Value::Bool(true));
@@ -610,12 +963,14 @@ const USAGE: &str = "Usage: switchboard install [--start] [--json]";
 
 const HELP: &str = "Usage: switchboard install [--start] [--json]
 
-Install this binary for the current user: the program in
-~/.local/share/switchboard, the switchboard command in ~/bin (linked from
-~/.local/bin), and the bridge's user service (launchd on macOS, systemd on
-Linux). Running it again upgrades in place. A bridge service an earlier
-version installed under its old name is moved to the current one, and
-restarted if it was running. It never joins chats or changes Claude Code
+Install this binary for the current user as the switchboard command,
+~/.local/bin/switchboard, and install the bridge's user service (launchd on
+macOS, systemd on Linux); the bridge's logs go in ~/.local/share/switchboard.
+Running it again upgrades in place. An installation from before 0.3.1 is
+moved: the ~/bin/switchboard command it wrote and its old program copy are
+removed, and so are files the Python releases left. A bridge service an
+earlier version installed under its old name is moved to the current one,
+and restarted if it was running. It never joins chats or changes Claude Code
 settings.
 
 Options:
@@ -710,11 +1065,10 @@ pub fn main(argv: &[String]) -> i32 {
         "launch_agent"
     };
     let mut lines = vec![format!(
-        "Installed switchboard {} in {}.",
+        "Installed switchboard {} as {}.",
         crate::VERSION,
-        text("source")
+        text("command")
     )];
-    lines.push(format!("Command: {}", text("command")));
     let started = result.get("started") == Some(&Value::Bool(true));
     lines.push(format!(
         "Bridge service: {} ({})",
@@ -727,6 +1081,7 @@ pub fn main(argv: &[String]) -> i32 {
             text("migrated_from")
         ));
     }
+    lines.extend(migration_lines(&result));
     if down {
         lines.push(
             "This machine is down, so the bridge wasn't started. To bring it back online: switchboard up"
@@ -742,6 +1097,51 @@ pub fn main(argv: &[String]) -> i32 {
     }
     super::out(&format!("{}\n", lines.join("\n")));
     0
+}
+
+/// What `install` says about moving an earlier installation.
+pub fn migration_lines(result: &Map<String, Value>) -> Vec<String> {
+    let text = |key: &str| tilde(result.get(key).and_then(Value::as_str).unwrap_or(""));
+    let mut lines = Vec::new();
+    if let Some(Value::Array(removed)) = result.get("removed") {
+        lines.push("Removed what earlier versions left:".into());
+        lines.extend(
+            removed
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|path| format!("    {}", tilde(path))),
+        );
+    }
+    if let Some(count) = result.get("pruned_backups").and_then(Value::as_u64) {
+        lines.push(format!(
+            "Removed {count} older installer backup{} (the newest {KEEP_BACKUPS} stay).",
+            if count == 1 { "" } else { "s" }
+        ));
+    }
+    if result.contains_key("plugin_link") {
+        lines.push(format!(
+            "Kept {} as a link to the program: the Claude Code plugin installed here is older than {PLUGIN_FINDS_LOCAL_BIN} and runs that path. Update the plugin (claude plugin marketplace update switchboard), and the next upgrade removes the link.",
+            text("plugin_link")
+        ));
+    }
+    if result.contains_key("old_program_kept") {
+        lines.push(format!(
+            "The running bridge still uses {}; it is removed when the bridge next starts (switchboard down, then switchboard up, restarts it).",
+            text("old_program_kept")
+        ));
+    }
+    if result.contains_key("left") {
+        lines.push(format!(
+            "Left {} alone: Switchboard didn't write it. If it comes first on your PATH, it runs instead of switchboard.",
+            text("left")
+        ));
+    }
+    if let Some(Value::Array(failed)) = result.get("cleanup_failed") {
+        for failure in failed.iter().filter_map(Value::as_str) {
+            lines.push(format!("Couldn't remove {failure}"));
+        }
+    }
+    lines
 }
 
 #[cfg(test)]

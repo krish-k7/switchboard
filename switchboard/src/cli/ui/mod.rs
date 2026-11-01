@@ -551,7 +551,7 @@ fn runnable(command: &str) -> bool {
     matches!(
         first,
         "switchboard"
-            | "~/bin/switchboard"
+            | "~/.local/bin/switchboard"
             | "sudo"
             | "journalctl"
             | "claude"

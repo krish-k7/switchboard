@@ -662,35 +662,28 @@ fn install_is_standalone_preserves_logs_and_refuses_unmanaged_files() {
     } else {
         "launch_agent"
     };
+    let installed = home.join(".local/bin/switchboard");
     assert_eq!(
         result,
-        json!({"command": home.join("bin/switchboard"), "path_command": home.join(".local/bin/switchboard"),
-        "source": source, "config": home.join(".config/switchboard/bridge.json"), service_key: service, "started": false})
+        json!({"command": installed, "source": home.join(".local/bin"), "data": source,
+        "config": home.join(".config/switchboard/bridge.json"), service_key: service, "started": false})
     );
     assert!(!home.join(".config/switchboard/bridge.json").exists());
-    let installed = source.join("switchboard");
+    // The command is the program itself: no wrapper, no second copy.
+    assert!(std::fs::symlink_metadata(&installed)
+        .unwrap()
+        .file_type()
+        .is_file());
     assert_eq!(mode(&installed), 0o700);
     assert_eq!(
         std::fs::read(&installed).unwrap(),
         std::fs::read(binary()).unwrap()
     );
+    assert!(!source.join("switchboard").exists());
+    assert!(std::fs::symlink_metadata(home.join("bin")).is_err());
     assert_eq!(
         std::fs::read_to_string(source.join(".switchboard-install")).unwrap(),
         "1\n"
-    );
-    let wrapper = std::fs::read_to_string(home.join("bin/switchboard")).unwrap();
-    assert_eq!(
-        wrapper,
-        format!(
-            "#!/bin/sh\n# Managed by switchboard install\nexec {} cli \"$@\"\n",
-            installed.display()
-        )
-    );
-    assert!(
-        std::fs::symlink_metadata(home.join(".local/bin/switchboard"))
-            .unwrap()
-            .file_type()
-            .is_symlink()
     );
     assert_eq!(mode(&service), 0o600);
     let service_text = std::fs::read_to_string(&service).unwrap();
@@ -708,14 +701,14 @@ fn install_is_standalone_preserves_logs_and_refuses_unmanaged_files() {
     }
     // The installed command works without the build tree, and doctor writes nothing.
     let help = env
-        .command(home.join("bin/switchboard").to_str().unwrap(), &["--help"])
+        .command(installed.to_str().unwrap(), &["--help"])
         .output()
         .unwrap();
     assert_eq!(help.status.code(), Some(0));
     let missing = home.join("missing-bridge.json");
     let doctor = env
         .command(
-            home.join("bin/switchboard").to_str().unwrap(),
+            installed.to_str().unwrap(),
             &["doctor", "--json", "--config", missing.to_str().unwrap()],
         )
         .output()
@@ -727,7 +720,7 @@ fn install_is_standalone_preserves_logs_and_refuses_unmanaged_files() {
     assert!(diagnostics["checks"][0]["summary"]
         .as_str()
         .unwrap()
-        .ends_with(", installed in ~/bin."));
+        .ends_with(", installed in ~/.local/bin."));
     assert!(!missing.exists());
     // Existing logs keep their contents and inode; a widened mode is backed up and reset.
     let log = source.join("daemon.log");
@@ -746,14 +739,23 @@ fn install_is_standalone_preserves_logs_and_refuses_unmanaged_files() {
         .unwrap()
         .next()
         .is_some());
-    // An unmanaged command in the way stops the installer without changing it.
-    let link = home.join(".local/bin/switchboard");
-    std::fs::remove_file(&link).unwrap();
-    std::fs::write(&link, "unmanaged").unwrap();
+    // An unmanaged command in the way stops the installer without changing
+    // it: a file of its own, or a link elsewhere.
+    std::fs::remove_file(&installed).unwrap();
+    std::fs::write(&installed, "unmanaged").unwrap();
     let refused = env.run(&["install"]);
     assert_eq!(refused.status.code(), Some(1));
     assert!(stderr(&refused).contains("unmanaged command: "));
-    assert_eq!(std::fs::read_to_string(&link).unwrap(), "unmanaged");
+    assert_eq!(std::fs::read_to_string(&installed).unwrap(), "unmanaged");
+    std::fs::remove_file(&installed).unwrap();
+    std::os::unix::fs::symlink("/usr/bin/true", &installed).unwrap();
+    let refused = env.run(&["install"]);
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(stderr(&refused).contains("unmanaged command: "));
+    assert_eq!(
+        std::fs::read_link(&installed).unwrap(),
+        Path::new("/usr/bin/true")
+    );
 }
 
 #[test]
@@ -779,9 +781,10 @@ fn install_upgrades_an_early_release_installation_in_place() {
     }
     let output = env.run(&["install", "--json"]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
-    assert!(std::fs::read_to_string(home.join("bin/switchboard"))
-        .unwrap()
-        .contains(" cli \"$@\""));
+    // The early release's command is gone; the program is the command now.
+    assert!(std::fs::symlink_metadata(home.join("bin/switchboard")).is_err());
+    assert!(home.join(".local/bin/switchboard").is_file());
+    // A file whose name no installer wrote stays.
     assert_eq!(
         std::fs::read_to_string(source.join("old-runtime")).unwrap(),
         "# old runtime\n"

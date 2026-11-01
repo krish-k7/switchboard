@@ -16,10 +16,10 @@ Switchboard is one binary, `switchboard`, with one subcommand per role:
 | `switchboard server ...` | The server and its administration commands |
 | `switchboard --version` | Print the version, such as `switchboard 0.2.0` |
 
-The installed command `~/bin/switchboard` is a two-line script that runs
-`~/.local/share/switchboard/switchboard cli "$@"`; every row above works through it too. Run server
-commands as `sudo switchboard server ...`, which uses the server's own copy in
-`/usr/local/bin`.
+The installed command `~/.local/bin/switchboard` is the program itself; every row above works
+through it. Run server commands as `sudo switchboard server ...`, which uses the server's own copy,
+linked from `/usr/local/bin` (on a distribution whose sudo doesn't search `/usr/local/bin`, use
+`sudo /usr/local/bin/switchboard server ...`; the server's own hints then say so).
 
 ## User commands
 
@@ -51,7 +51,8 @@ the setup to `~/.config/switchboard.left-<time>`; a machine that was down also h
 allowed to start at login again, as `uninstall --purge` does, so the next setup doesn't find it
 disabled. Joining a different server keeps the service, which runs the new setup.
 
-When `switchboard` isn't on your `PATH`, init offers to add `~/bin` to your shell's startup file
+When `~/.local/bin` (where the command is) isn't on your `PATH`, init offers to add it to your
+shell's startup file
 (`~/.zshrc`, `~/.bashrc`, fish's `config.fish`, or `~/.profile`). Bash on macOS reads only the
 first of `~/.bash_profile`, `~/.bash_login`, and `~/.profile` that exists, so the line goes in that
 one; with none of them, init makes `~/.bash_profile` with a line that also reads `~/.profile`.
@@ -231,9 +232,10 @@ startup file `eval "$(switchboard completion zsh)"` (or `bash`), or for fish
 
 Install the running binary for the current user:
 
-- the program at `~/.local/share/switchboard/switchboard`;
-- the command `~/bin/switchboard`, linked from `~/.local/bin/switchboard`;
-- the bridge's user service, running `switchboard bridge --config ~/.config/switchboard/bridge.json`
+- the program at `~/.local/bin/switchboard`, which is the command (written beside the old one and
+  renamed over it, so a running bridge keeps the program it started with until it restarts);
+- the bridge's user service, running `~/.local/bin/switchboard bridge --config
+  ~/.config/switchboard/bridge.json` in `~/.local/share/switchboard` (where its logs go)
   with umask 077, restarted 10 seconds after it exits while that configuration exists (without
   one it stays stopped), and given 30 seconds to stop: on macOS the
   launch agent `~/Library/LaunchAgents/dev.switchboard.bridge.plist` (label
@@ -243,23 +245,57 @@ Install the running binary for the current user:
 
 It doesn't start the bridge unless given `--start`, and never joins chats or changes Claude Code
 settings. On a machine that is down it neither enables the service nor starts it, even with
-`--start`, and its JSON adds `down: true`. Running it again upgrades in place; files it replaces are backed up under
-`~/.local/share/switchboard/backups/`. It replaces only files it wrote (each carries a marker),
-and moves a bridge service installed by an earlier version under the old name
-(`com.vorelios.switchboard` on macOS, `switchboard.service` on Linux), restarting it if it was
-running.
+`--start`, and its JSON adds `down: true`. Running it again upgrades in place; files it replaces
+are backed up under `~/.local/share/switchboard/backups/`, of which the newest 5 are kept (older
+ones it named are removed). It replaces only files it wrote (each carries a marker, and every
+Switchboard program carries it too), and moves a bridge service installed by an earlier version
+under the old name (`com.vorelios.switchboard` on macOS, `switchboard.service` on Linux),
+restarting it if it was running.
+
+Releases before 0.3.1 kept the program in `~/.local/share/switchboard/switchboard`, wrote the
+command `~/bin/switchboard` (a wrapper script), and linked `~/.local/bin/switchboard` to it; the
+Python releases before them left their modules there too. Installing moves such an installation,
+removing only what an installer wrote:
+
+- `~/bin/switchboard`, when it is the wrapper (its marker line says so) or a link to the program.
+  A Claude Code plugin older than 0.3.1 runs that path, so while Claude Code lists one, it becomes
+  a link to `~/.local/bin/switchboard` instead (and stays when Claude Code can't answer); the
+  first install after the plugin is updated removes it. A `~/bin/switchboard` an installer didn't
+  write is left alone (JSON `left`).
+- `~/.local/bin/switchboard`, when it is the old link to `~/bin/switchboard`: the program takes
+  its place. Anything else there that isn't a Switchboard program is refused (`unmanaged
+  command`).
+- `~/.local/share/switchboard/switchboard`, once no service runs it: right away when the bridge
+  isn't running (or the machine is down), otherwise when the bridge next starts from
+  `~/.local/bin/switchboard` (JSON `old_program_kept` until then).
+- The Python releases' files in `~/.local/share/switchboard`, by name: `switchboard.py`,
+  `bridge.py`, `native_peer.py`, `local_viewer.py`, `discovery_watch.py`, `hub_transport.py`,
+  `hub_requests.py`, `doctor.py`, `session_metadata.py`, `roster_client.py`, `membership.py`,
+  `ping_client.py`, `enroll.py`, and `machines_client.py`, and in `__pycache__` only the
+  bytecode compiled from them (`__pycache__` itself goes once empty).
+
+Its JSON: `command` (the program), `source` (its directory), `data`
+(`~/.local/share/switchboard`), `config`, `launch_agent` or `user_service`, `started`, and when
+they apply `migrated_from`, `down`, `removed` (the paths it removed), `pruned_backups` (how many
+backup folders), `plugin_link`, `old_program_kept`, `left`, and `cleanup_failed` (what it
+couldn't remove, which never fails the install).
 
 ### `switchboard upgrade [VERSION] [--force]`
 
 Download the latest release, or VERSION (such as `1.2.3`), check it against the release's
 `SHA256SUMS` and that it reports the expected version, run its own `install`, and restart the
-bridge if it was running. A machine that is down stays down (the JSON adds `down: true`). The same version does nothing, and an older one is refused unless
+bridge if it was running. The new program replaces `~/.local/bin/switchboard` in one rename, so
+the running bridge keeps working until the restart. Moving back to a release before 0.3.1 (with
+`--force`) first removes this version's `~/.local/bin/switchboard` and `~/bin/switchboard` link,
+which that release's installer would refuse; if it fails, this version is put back. A machine that is down stays down (the JSON adds `down: true`). The same version does nothing, and an older one is refused unless
 `--force` is given. Downloads use HTTPS only.
 
 ### `switchboard uninstall [--purge]`
 
-Stop the bridge and remove its service, the `switchboard` command and its link (only if they are
-Switchboard's), the program, and its backups. Keeps `~/.config/switchboard` (configuration, key,
+Stop the bridge and remove its service, the program `~/.local/bin/switchboard` (only if it is
+Switchboard's), what releases before 0.3.1 installed (the `~/bin/switchboard` wrapper or link,
+the program copy, and the Python releases' files, each only if an installer wrote it), and the
+backups. Keeps `~/.config/switchboard` (configuration, key,
 and chat membership) and the logs in `~/.local/share/switchboard`, unless `--purge` is given,
 which deletes both directories (and lets launchd start the bridge again after a `down`). A
 configuration elsewhere (`SWITCHBOARD_CONFIG`) is never
@@ -323,9 +359,8 @@ Commands in text are in backticks.
 
 | Path | What it is |
 | --- | --- |
-| `~/bin/switchboard` | The command; `~/.local/bin/switchboard` links to it |
-| `~/.local/share/switchboard/switchboard` | The installed program |
-| `~/.local/share/switchboard/backups/` | Files replaced by earlier installs |
+| `~/.local/bin/switchboard` | The program, which is the command |
+| `~/.local/share/switchboard/backups/` | Files replaced by earlier installs (the newest 5 installs) |
 | `~/.local/share/switchboard/daemon.log`, `daemon-error.log` | The bridge's logs: one JSON object per line, starting with `at`, the UTC time |
 | `~/.config/switchboard/bridge.json` | The bridge configuration (below) |
 | `~/.config/switchboard/membership.json` | The joined chats and the names other machines see; the plugin's footer label reads it |

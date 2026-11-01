@@ -21,8 +21,11 @@ Or load it for one chat only:
 claude --plugin-dir /path/to/switchboard/claude-plugin
 ```
 
-The plugin calls the installed CLI at `~/bin/switchboard`; it does not install or start the
-bridge, and it never reads or sends messages. To install the CLI, run this in a terminal:
+The plugin calls the installed CLI at `~/.local/bin/switchboard` (or `~/bin/switchboard`, where
+releases before 0.3.1 put it); it does not install or start the bridge, and it never reads or
+sends messages. Plugins before 0.3.1 know only `~/bin/switchboard`: while Claude Code lists one,
+`switchboard install` keeps that path as a link to the program, and removes it once the plugin is
+updated. To install the CLI, run this in a terminal:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/krish-k7/switchboard/main/install.sh | sh

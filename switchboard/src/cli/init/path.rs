@@ -1,12 +1,15 @@
-//! Offering to put `~/bin` on PATH, so `switchboard` runs by name, and to
-//! turn on Tab completion (`switchboard completion`) in the same file.
+//! Offering to put `~/.local/bin` on PATH, so `switchboard` runs by name,
+//! and to turn on Tab completion (`switchboard completion`) in the same
+//! file.
 //!
-//! install.sh writes the command to `~/bin/switchboard` (and links it from
-//! `~/.local/bin`). When neither directory is on PATH, init finds the
-//! startup file of the shell in `SHELL`, shows the exact line it would add,
-//! and asks. It never adds a line twice: a startup file that already puts
-//! `~/bin` on PATH is left alone. Without a terminal, or with `--yes`, it
-//! only says what to add; it edits a startup file only when asked.
+//! The installer puts the command at `~/.local/bin/switchboard`, where
+//! Claude Code's own installer, uv, and pipx put theirs, so it is often on
+//! PATH already. When it isn't, init finds the startup file of the shell in
+//! `SHELL`, shows the exact line it would add, and asks. It never adds a
+//! line twice: a startup file that already puts `~/.local/bin` on PATH (or
+//! sources the `~/.local/bin/env` script uv writes) is left alone. Without a
+//! terminal, or with `--yes`, it only says what to add; it edits a startup
+//! file only when asked.
 //!
 //! Bash on macOS starts login shells, which read only the first of
 //! `~/.bash_profile`, `~/.bash_login`, and `~/.profile` that exists, so the
@@ -25,7 +28,7 @@ use serde_json::{Map, Value};
 use super::super::ui::prompt::{Confirm, Problem, Ui};
 use super::{Fail, Options};
 
-/// A shell's startup file and the line that puts `~/bin` on PATH in it.
+/// A shell's startup file and the line that puts `~/.local/bin` on PATH in it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Startup {
     /// The file's absolute path.
@@ -38,8 +41,8 @@ pub struct Startup {
     pub preamble: Option<&'static str>,
 }
 
-const POSIX_LINE: &str = "export PATH=\"$HOME/bin:$PATH\"";
-const FISH_LINE: &str = "set -gx PATH $HOME/bin $PATH";
+const POSIX_LINE: &str = "export PATH=\"$HOME/.local/bin:$PATH\"";
+const FISH_LINE: &str = "set -gx PATH $HOME/.local/bin $PATH";
 const READ_PROFILE: &str = "[ -r \"$HOME/.profile\" ] && . \"$HOME/.profile\"";
 
 /// Whether `path` exists (through links) for a shell to read.
@@ -98,12 +101,33 @@ pub fn startup_file(shell: &str, home: &str, zdotdir: Option<&str>, macos: bool)
     }
 }
 
-/// Whether a startup file already puts `~/bin` on PATH (outside comments).
+/// Whether a startup file already puts `~/.local/bin` on PATH (outside
+/// comments), itself or by sourcing the `~/.local/bin/env` script uv writes.
 pub fn already_adds(contents: &str, home: &str) -> bool {
-    let home_bin = format!("{}/bin", home.trim_end_matches('/'));
-    let needles = ["$HOME/bin", "${HOME}/bin", "~/bin", home_bin.as_str()];
+    let home_bin = format!("{}/.local/bin", home.trim_end_matches('/'));
+    let needles = [
+        "$HOME/.local/bin",
+        "${HOME}/.local/bin",
+        "~/.local/bin",
+        home_bin.as_str(),
+    ];
     contents.lines().any(|line| {
         let line = line.trim();
+        if line.starts_with('#') {
+            return false;
+        }
+        // `. "$HOME/.local/bin/env"` (uv), or `source` in fish.
+        let unquoted = line.replace(['"', '\''], "");
+        let mut words = unquoted.split_whitespace();
+        let sources_env = matches!(words.next(), Some("." | "source"))
+            && words.next().is_some_and(|script| {
+                needles.iter().any(|needle| {
+                    script == format!("{needle}/env") || script == format!("{needle}/env.fish")
+                })
+            });
+        if sources_env {
+            return true;
+        }
         // PATH itself (not GOPATH), zsh's path array, or fish_add_path.
         let sets_path = line
             .match_indices("PATH")
@@ -116,7 +140,7 @@ pub fn already_adds(contents: &str, home: &str) -> bool {
         }
         needles.iter().any(|needle| {
             line.match_indices(needle).any(|(at, _)| {
-                // `~/bin` itself, not `~/bin2` or `~/bin/tools`.
+                // `~/.local/bin` itself, not `~/.local/bin2` or `~/.local/bin/tools`.
                 !line[at + needle.len()..]
                     .starts_with(|c: char| c.is_alphanumeric() || "/_-.".contains(c))
             })
@@ -154,8 +178,8 @@ pub fn append(startup: &Startup) -> std::io::Result<()> {
     file.write_all(text.as_bytes())
 }
 
-/// Offer to put `~/bin` on PATH when `switchboard` doesn't run by name,
-/// then to turn on Tab completion.
+/// Offer to put `~/.local/bin` on PATH when `switchboard` doesn't run by
+/// name, then to turn on Tab completion.
 pub fn offer(ui: &mut Ui, options: &Options, summary: &mut Map<String, Value>) -> Result<(), Fail> {
     offer_path(ui, options, summary)?;
     offer_completion(ui, options, summary)
@@ -240,7 +264,8 @@ fn offer_completion(
     Ok(())
 }
 
-/// Offer to put `~/bin` on PATH when `switchboard` doesn't run by name.
+/// Offer to put `~/.local/bin` on PATH when it isn't on PATH, so
+/// `switchboard` runs by name.
 fn offer_path(
     ui: &mut Ui,
     options: &Options,
@@ -265,7 +290,7 @@ fn offer_path(
     if already_adds(&contents, &home) {
         record(summary, "in_startup_file");
         ui.done(&format!(
-            "Your {} already puts ~/bin on your PATH, so new terminals find switchboard",
+            "Your {} already puts ~/.local/bin on your PATH, so new terminals find switchboard",
             startup.shown
         ));
         return Ok(());
@@ -273,7 +298,7 @@ fn offer_path(
     if !ui.interactive() || options.yes {
         record(summary, "missing");
         ui.warn(&format!(
-            "~/bin isn't on your PATH, so run `~/bin/switchboard`, or add this line to {}:\n`{}`",
+            "~/.local/bin isn't on your PATH, so run `~/.local/bin/switchboard`, or add this line to {}:\n`{}`",
             startup.shown, startup.line
         ));
         return Ok(());
@@ -290,11 +315,11 @@ fn offer_path(
         )
     };
     let add = ui.confirm(&Confirm {
-        question: &format!("Add ~/bin to your PATH in {}?", startup.shown),
+        question: &format!("Add ~/.local/bin to your PATH in {}?", startup.shown),
         yes: "Add it",
         yes_detail: &detail,
         no: "Not now",
-        no_detail: "Run it as `~/bin/switchboard` instead.",
+        no_detail: "Run it as `~/.local/bin/switchboard` instead.",
         default_yes: true,
         flag: "",
         declined: Some("Left your PATH as it is"),
@@ -307,14 +332,14 @@ fn offer_path(
         Ok(()) => {
             record(summary, "added");
             ui.done(&format!(
-                "Added `~/bin` to your PATH in `{}`; new terminals find switchboard",
+                "Added `~/.local/bin` to your PATH in `{}`; new terminals find switchboard",
                 startup.shown
             ));
         }
         Err(error) => {
             record(summary, "failed");
             ui.caution(
-                &Problem::new(format!("Couldn't add ~/bin to {}.", startup.shown))
+                &Problem::new(format!("Couldn't add ~/.local/bin to {}.", startup.shown))
                     .detail(format!("{error}."))
                     .fix(format!("add this line to it yourself: `{}`", startup.line)),
             );
@@ -335,7 +360,7 @@ mod tests {
             (
                 "/Users/k/.zshrc",
                 "~/.zshrc",
-                "export PATH=\"$HOME/bin:$PATH\""
+                "export PATH=\"$HOME/.local/bin:$PATH\""
             )
         );
         assert_eq!(
@@ -353,7 +378,10 @@ mod tests {
         let fish = startup_file("/usr/bin/fish", "/home/k", None, false);
         assert_eq!(
             (fish.shown.as_str(), fish.line.as_str()),
-            ("~/.config/fish/config.fish", "set -gx PATH $HOME/bin $PATH")
+            (
+                "~/.config/fish/config.fish",
+                "set -gx PATH $HOME/.local/bin $PATH"
+            )
         );
         assert_eq!(startup_file("", "/home/k", None, false).shown, "~/.profile");
         assert_eq!(
@@ -365,19 +393,42 @@ mod tests {
     #[test]
     fn an_existing_line_is_never_added_twice() {
         let home = "/home/k";
-        assert!(already_adds("export PATH=\"$HOME/bin:$PATH\"\n", home));
-        assert!(already_adds("PATH=~/bin:$PATH", home));
-        assert!(already_adds("export PATH=${HOME}/bin:$PATH", home));
-        assert!(already_adds("export PATH=/home/k/bin:$PATH", home));
-        assert!(already_adds("set -gx PATH $HOME/bin $PATH", home));
-        assert!(already_adds("fish_add_path ~/bin", home));
-        assert!(already_adds("path=(~/bin $path)", home));
-        assert!(!already_adds("export GOPATH=$HOME/bin", home));
-        assert!(!already_adds("PYTHONPATH=~/bin", home));
-        assert!(!already_adds("# export PATH=\"$HOME/bin:$PATH\"", home));
-        assert!(!already_adds("export PATH=\"$HOME/bin2:$PATH\"", home));
-        assert!(!already_adds("export PATH=\"$HOME/bin/tools:$PATH\"", home));
-        assert!(!already_adds("alias b=~/bin/thing", home));
+        assert!(already_adds(
+            "export PATH=\"$HOME/.local/bin:$PATH\"\n",
+            home
+        ));
+        assert!(already_adds("PATH=~/.local/bin:$PATH", home));
+        assert!(already_adds("export PATH=${HOME}/.local/bin:$PATH", home));
+        assert!(already_adds("export PATH=/home/k/.local/bin:$PATH", home));
+        assert!(already_adds(
+            "export PATH=\"$PATH:/home/k/.local/bin\"",
+            home
+        ));
+        assert!(already_adds("set -gx PATH $HOME/.local/bin $PATH", home));
+        assert!(already_adds("fish_add_path ~/.local/bin", home));
+        assert!(already_adds("path=(~/.local/bin $path)", home));
+        // The script uv writes, which puts ~/.local/bin on PATH.
+        assert!(already_adds(". \"$HOME/.local/bin/env\"", home));
+        assert!(already_adds("source $HOME/.local/bin/env.fish", home));
+        assert!(!already_adds(". \"$HOME/.local/bin/envy\"", home));
+        assert!(!already_adds("export GOPATH=$HOME/.local/bin", home));
+        assert!(!already_adds("PYTHONPATH=~/.local/bin", home));
+        assert!(!already_adds(
+            "# export PATH=\"$HOME/.local/bin:$PATH\"",
+            home
+        ));
+        assert!(!already_adds("# . \"$HOME/.local/bin/env\"", home));
+        assert!(!already_adds(
+            "export PATH=\"$HOME/.local/bin2:$PATH\"",
+            home
+        ));
+        assert!(!already_adds(
+            "export PATH=\"$HOME/.local/bin/tools:$PATH\"",
+            home
+        ));
+        assert!(!already_adds("alias b=~/.local/bin/thing", home));
+        // ~/bin is no longer where the command is.
+        assert!(!already_adds("export PATH=\"$HOME/bin:$PATH\"", home));
         assert!(!already_adds("", home));
     }
 
@@ -394,7 +445,7 @@ mod tests {
         append(&startup).unwrap();
         assert_eq!(
             std::fs::read_to_string(&startup.file).unwrap(),
-            "# Added by switchboard init\nset -gx PATH $HOME/bin $PATH\n"
+            "# Added by switchboard init\nset -gx PATH $HOME/.local/bin $PATH\n"
         );
         let posix = Startup {
             file: dir.join(".zshrc").to_string_lossy().into_owned(),
@@ -407,7 +458,7 @@ mod tests {
         let text = std::fs::read_to_string(&posix.file).unwrap();
         assert_eq!(
             text,
-            "alias ll='ls -l'\n\n# Added by switchboard init\nexport PATH=\"$HOME/bin:$PATH\"\n"
+            "alias ll='ls -l'\n\n# Added by switchboard init\nexport PATH=\"$HOME/.local/bin:$PATH\"\n"
         );
         assert!(already_adds(&text, "/nowhere"));
         std::fs::remove_dir_all(&dir).unwrap();
@@ -454,7 +505,7 @@ mod tests {
         assert!(!std::path::Path::new(&home.file(".bash_profile")).exists());
         assert_eq!(
             std::fs::read_to_string(home.file(".profile")).unwrap(),
-            "export EDITOR=vi\n\n# Added by switchboard init\nexport PATH=\"$HOME/bin:$PATH\"\n"
+            "export EDITOR=vi\n\n# Added by switchboard init\nexport PATH=\"$HOME/.local/bin:$PATH\"\n"
         );
         // ~/.bash_login comes before ~/.profile, ~/.bash_profile before both.
         std::fs::write(home.file(".bash_login"), "").unwrap();
@@ -511,7 +562,7 @@ mod tests {
         let text = std::fs::read_to_string(home.file(".bash_profile")).unwrap();
         assert_eq!(
             text,
-            "# Added by switchboard init\n[ -r \"$HOME/.profile\" ] && . \"$HOME/.profile\"\nexport PATH=\"$HOME/bin:$PATH\"\n"
+            "# Added by switchboard init\n[ -r \"$HOME/.profile\" ] && . \"$HOME/.profile\"\nexport PATH=\"$HOME/.local/bin:$PATH\"\n"
         );
         assert!(already_adds(&text, home.path()));
         // Appending to a file that exists adds only the PATH line.

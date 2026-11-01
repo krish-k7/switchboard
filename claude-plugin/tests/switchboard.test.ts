@@ -63,7 +63,7 @@ function setup(on, { current = false } = {}) {
   on('classic.UserPromptSubmit', () => ({}))
   on('command.register', ($, e) => { registrations.push(e); return { value: undefined } })
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/test' : undefined }))
-  on('fs.exists', async () => { if (existsBarrier) await existsBarrier(); return { value: exists } })
+  on('fs.exists', async ($, e) => { if (existsBarrier) await existsBarrier(); return { value: typeof exists === 'function' ? exists(e.path) : exists } })
   on('session.id', async () => ({ value: identity }))
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['Host output'] }))
   on('process.spawn', async function* ($, e) { spawns.push(e.argv); return { value: { code: 2, signal: null } } })
@@ -103,7 +103,7 @@ function setup(on, { current = false } = {}) {
     } finally { running -= 1 }
   })
   return { calls, refused, spawns, registrations, peak: () => peak,
-    identity: value => { identity = value }, missing: () => { exists = false },
+    identity: value => { identity = value }, missing: () => { exists = false }, only: path => { exists = found => found === path },
     beforeProcess: value => { barrier = value }, beforeExists: value => { existsBarrier = value },
     response: (action, value, exitCode = 0) => { overrides.set(action, { exitCode, stdout: JSON.stringify(value), stderr: '' }) },
     raw: (action, stdout, exitCode = 0, stderr = '') => { overrides.set(action, { exitCode, stdout, stderr }) },
@@ -155,7 +155,7 @@ test('registration: explicit command, membership file watch, and no spawned proc
 test('default status shows membership with joined name and days left', async ($, on) => {
   const state = setup(on)
   expect((await command($)).text).toBe('Connected\nMachine:     laptop\nChat:        Local work\nMembership:  Not joined\nChats here:  0 of 1 joined\n\nTry:  /switchboard join')
-  expect(state.calls).toEqual([['/home/test/bin/switchboard', 'status', '--json']])
+  expect(state.calls).toEqual([['/home/test/.local/bin/switchboard', 'status', '--json']])
   expect(text(formatStatus(parseStatus(status(true)), ID, false, NOW))).toBe('Connected\nMachine:     laptop\nChat:        Local work\nMembership:  Joined as release-planner, expires in 6 days\nID:          ' + ID + '\nChats here:  1 of 1 joined\n\nTry:  /switchboard chats')
   expect(text(formatStatus(parseStatus({ ...status(false), connected: false }), ID))).toMatch(/^Not connected\n/)
   expect(text(formatStatus(parseStatus({ ...status(false), enabled: false, connected: false }), ID))).toMatch(/^Bridge turned off\n/)
@@ -204,9 +204,9 @@ test('session flags route explicit argv; search stays local and matches joined n
   expect(remote.text).not.toContain('laptop (this machine)')
   await command($, 'sessions --local $(touch /tmp/never-created)')
   expect(state.calls).toEqual([
-    ['/home/test/bin/switchboard', 'sessions', '--json', '--local'],
-    ['/home/test/bin/switchboard', 'sessions', '--json', '--remote'],
-    ['/home/test/bin/switchboard', 'sessions', '--json', '--local'],
+    ['/home/test/.local/bin/switchboard', 'sessions', '--json', '--local'],
+    ['/home/test/.local/bin/switchboard', 'sessions', '--json', '--remote'],
+    ['/home/test/.local/bin/switchboard', 'sessions', '--json', '--local'],
   ])
 })
 
@@ -246,9 +246,9 @@ test('join passes the chosen name after --, confirms reach, and leave confirms w
   state.identity(OTHER)
   expect((await command($, 'leave')).text).toBe('This chat left.\nOther machines can no longer see it.')
   expect(state.calls).toEqual([
-    ['/home/test/bin/switchboard', 'join', '--json', '--session', ID, '--', 'release planner'],
-    ['/home/test/bin/switchboard', 'join', '--json', '--session', ID],
-    ['/home/test/bin/switchboard', 'leave', '--json', '--session', OTHER],
+    ['/home/test/.local/bin/switchboard', 'join', '--json', '--session', ID, '--', 'release planner'],
+    ['/home/test/.local/bin/switchboard', 'join', '--json', '--session', ID],
+    ['/home/test/.local/bin/switchboard', 'leave', '--json', '--session', OTHER],
   ])
   for (const output of [(await command($, 'join')).text, (await command($, 'leave')).text]) expect(output).not.toContain('requested')
 })
@@ -303,7 +303,7 @@ test('machine commands moved to the server: they say where, and run nothing', as
 test('ping renders a reply, a plain failure, and an install without ping', async ($, on) => {
   const state = setup(on)
   expect((await command($, 'ping worker/Remote-research')).text).toBe('worker/Remote-research replied in 182 ms.')
-  expect(state.calls[0]).toEqual(['/home/test/bin/switchboard', 'ping', '--json', '--', 'worker/Remote-research'])
+  expect(state.calls[0]).toEqual(['/home/test/.local/bin/switchboard', 'ping', '--json', '--', 'worker/Remote-research'])
   state.raw('ping', '', 1, JSON.stringify({ ok: false, error: 'no joined chat matches worker/nothing' }))
   expect((await command($, 'ping worker/nothing')).text).toBe('No reply from worker/nothing.\nNo joined chat matches worker/nothing.')
   state.raw('ping', '', 2, JSON.stringify({ ok: false, error: "argument COMMAND: invalid choice: 'ping'" }))
@@ -357,6 +357,16 @@ test('malformed structured output is rejected instead of producing membership or
   expect(() => parseRoster({ ...roster(), sessions: [row(), row()] })).toThrow()
 })
 
+test('the command is found in ~/.local/bin, or where releases before 0.3.1 put it', async ($, on) => {
+  const state = setup(on)
+  state.only('/home/test/bin/switchboard')
+  await command($, 'status')
+  expect(state.calls).toEqual([['/home/test/bin/switchboard', 'status', '--json']])
+  state.only('/home/test/.local/bin/switchboard')
+  await command($, 'status')
+  expect(state.calls[1]).toEqual(['/home/test/.local/bin/switchboard', 'status', '--json'])
+})
+
 test('missing installation and nonzero CLI output stay actionable and private', async ($, on) => {
   const state = setup(on)
   state.raw('status', JSON.stringify({ ok: false, error: 'Bearer private http://127.0.0.1:1234/private/' }), 1, 'Bearer private')
@@ -367,7 +377,7 @@ test('missing installation and nonzero CLI output stay actionable and private', 
   expect((await command($, 'status')).text).toContain('failed')
   state.missing()
   const missing = (await command($, 'status')).text
-  expect(missing).toBe('Error: Switchboard isn’t installed on this machine (~/bin/switchboard is missing). To install it, run this in a terminal:\n  curl -fsSL https://raw.githubusercontent.com/krish-k7/switchboard/main/install.sh | sh')
+  expect(missing).toBe('Error: Switchboard isn’t installed on this machine (~/.local/bin/switchboard is missing). To install it, run this in a terminal:\n  curl -fsSL https://raw.githubusercontent.com/krish-k7/switchboard/main/install.sh | sh')
   expect(missing).not.toContain('URL omitted')
   expect(missing).not.toContain('INSTALL.md')
   expect(clean('name\u001b Bearer secret http://127.0.0.1:1234/private/')).not.toContain('secret')
@@ -410,7 +420,7 @@ test('session changes discard the pending reply and queued mutation, while a new
   expect(answers[1].text).toBe('Error: This chat was cleared or switched; run the command again.')
   expect(state.calls.map(argv => argv[1])).toEqual(['status'])
   await command($, 'join')
-  expect(state.calls[1]).toEqual(['/home/test/bin/switchboard', 'join', '--json', '--session', OTHER])
+  expect(state.calls[1]).toEqual(['/home/test/.local/bin/switchboard', 'join', '--json', '--session', OTHER])
 })
 
 test('session change during CLI setup prevents the old mutation process from starting', async ($, on) => {
@@ -499,8 +509,8 @@ test('chats lists chats; sessions is an accepted older name for it', async ($, o
   expect(chats.text).toMatch(/^Chats on this machine matching “solver”\n/)
   expect(chats.text).toContain('Full IDs and details:  /switchboard chats --local --details -- solver')
   expect(state.calls).toEqual([
-    ['/home/test/bin/switchboard', 'sessions', '--json', '--local'],
-    ['/home/test/bin/switchboard', 'sessions', '--json', '--local'],
+    ['/home/test/.local/bin/switchboard', 'sessions', '--json', '--local'],
+    ['/home/test/.local/bin/switchboard', 'sessions', '--json', '--local'],
   ])
   const help = (await command($, 'help')).text
   expect(help).toContain('  chats        List chats on this machine and others')
@@ -858,13 +868,13 @@ test('status, chats, join, leave, ping, and doctor show the CLI display and pass
   expect((await command($, 'ping worker/research')).text).toBe(shownText('ping'))
   expect((await command($, 'doctor')).text).toBe(shownText('doctor-problems'))
   expect(state.calls).toEqual([
-    ['/home/test/bin/switchboard', 'status', '--json', '--display', '--chat', ID],
-    ['/home/test/bin/switchboard', 'sessions', '--json', '--remote', '--details', '--display', '--chat', ID, '--', 'research notes'],
-    ['/home/test/bin/switchboard', 'join', '--json', '--session', ID, '--display', '--', 'solver'],
-    ['/home/test/bin/switchboard', 'status', '--json', '--display', '--chat', ID],
-    ['/home/test/bin/switchboard', 'leave', '--json', '--session', ID, '--display'],
-    ['/home/test/bin/switchboard', 'ping', '--json', '--display', '--', 'worker/research'],
-    ['/home/test/bin/switchboard', 'doctor', '--json', '--display'],
+    ['/home/test/.local/bin/switchboard', 'status', '--json', '--display', '--chat', ID],
+    ['/home/test/.local/bin/switchboard', 'sessions', '--json', '--remote', '--details', '--display', '--chat', ID, '--', 'research notes'],
+    ['/home/test/.local/bin/switchboard', 'join', '--json', '--session', ID, '--display', '--', 'solver'],
+    ['/home/test/.local/bin/switchboard', 'status', '--json', '--display', '--chat', ID],
+    ['/home/test/.local/bin/switchboard', 'leave', '--json', '--session', ID, '--display'],
+    ['/home/test/.local/bin/switchboard', 'ping', '--json', '--display', '--', 'worker/research'],
+    ['/home/test/.local/bin/switchboard', 'doctor', '--json', '--display'],
   ])
   expect(state.refused).toEqual([])
 })
@@ -875,8 +885,8 @@ test('up and down take this machine on and off Switchboard', async ($, on) => {
   expect((await command($, 'up')).text).toBe(shownText('up'))
   expect(shownText('down')).toContain('/switchboard up')
   expect(state.calls).toEqual([
-    ['/home/test/bin/switchboard', 'down', '--json', '--display'],
-    ['/home/test/bin/switchboard', 'up', '--json', '--display'],
+    ['/home/test/.local/bin/switchboard', 'down', '--json', '--display'],
+    ['/home/test/.local/bin/switchboard', 'up', '--json', '--display'],
   ])
   expect((await command($, 'up now')).text).toBe('Error: /switchboard up takes no arguments. Run /switchboard help.')
   state.response('up', { ok: false, error: 'the bridge did not start within 30 seconds' }, 1)
@@ -886,8 +896,8 @@ test('up and down take this machine on and off Switchboard', async ($, on) => {
 test('an older CLI without displays is asked again the old way', async ($, on) => {
   const state = setup(on)
   expect((await command($)).text).toBe('Connected\nMachine:     laptop\nChat:        Local work\nMembership:  Not joined\nChats here:  0 of 1 joined\n\nTry:  /switchboard join')
-  expect(state.refused).toEqual([['/home/test/bin/switchboard', 'status', '--json', '--display', '--chat', ID]])
-  expect(state.calls).toEqual([['/home/test/bin/switchboard', 'status', '--json']])
+  expect(state.refused).toEqual([['/home/test/.local/bin/switchboard', 'status', '--json', '--display', '--chat', ID]])
+  expect(state.calls).toEqual([['/home/test/.local/bin/switchboard', 'status', '--json']])
   expect((await command($, 'down')).text).toBe('Error: This version of Switchboard can’t take this machine up or down. Update Switchboard with switchboard upgrade in a terminal.')
 })
 

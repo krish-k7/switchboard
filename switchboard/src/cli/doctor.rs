@@ -133,7 +133,8 @@ fn string(config: &Map<String, Value>, key: &str) -> String {
 /// Run every doctor check against the config at `config_path`.
 pub fn run_checks(config_path: &str) -> Map<String, Value> {
     let mut checks = Checks(Vec::new());
-    let runtime_root = fsutil::join(&super::local::home_dir(), ".local/share/switchboard");
+    let installation = super::install::paths(&super::local::home_dir());
+    let runtime_root = installation.destination.clone();
     let installed = (|| -> Result<()> {
         safe_path(&runtime_root, true, false)?;
         safe_path(
@@ -141,20 +142,19 @@ pub fn run_checks(config_path: &str) -> Map<String, Value> {
             false,
             false,
         )?;
-        safe_binary(&fsutil::join(&runtime_root, super::install::BINARY))
+        safe_binary(&installation.program)
     })();
     match installed {
         Ok(()) => checks.add(
             "program",
             "pass",
-            &format!("Switchboard {}, installed in ~/bin.", crate::VERSION),
+            &format!("Switchboard {}, installed in ~/.local/bin.", crate::VERSION),
             None,
         ),
         Err(_) => {
             let running = super::install::current_binary()
                 .ok()
-                .map(|p| fsutil::parent(&p))
-                .is_some_and(|dir| dir == runtime_root);
+                .is_some_and(|path| path == installation.program);
             checks.add(
                 "program",
                 if running { "fail" } else { "warn" },

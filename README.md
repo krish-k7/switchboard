@@ -26,7 +26,8 @@ curl -fsSL https://raw.githubusercontent.com/krish-k7/switchboard/main/install.s
 
 It downloads the release for the machine, checks it against the release's checksums, installs it
 under your home directory, and starts the setup wizard, `switchboard init`. The command is
-`~/bin/switchboard`; the wizard offers to add `~/bin` to your `PATH`.
+`~/.local/bin/switchboard`, where Claude Code's own installer puts `claude`; if `~/.local/bin`
+isn't on your `PATH`, the wizard offers to add it.
 
 ### Have your agent set it up
 

@@ -14,7 +14,7 @@ checks for scripts. Anything that needs attention comes first, each failure or w
 fix, then the checks that passed, one per line. A healthy machine looks like this:
 
 ```text
-✓ Switchboard 0.3.0, installed in ~/bin.
+✓ Switchboard 0.3.0, installed in ~/.local/bin.
 ✓ Configuration and key are private and valid.
 ✓ The bridge is running and connected.
 ✓ The server knows this machine as laptop (owner krish).
@@ -29,7 +29,7 @@ With the bridge stopped:
   To fix, run
       switchboard up
 
-✓ Switchboard 0.3.0, installed in ~/bin.
+✓ Switchboard 0.3.0, installed in ~/.local/bin.
 ✓ Configuration and key are private and valid.
 ✓ The server knows this machine as laptop (owner krish).
 
@@ -86,9 +86,32 @@ numbered steps.
 | `The --invite option needs a terminal to ask for the invite on.` | You ran the installer with `--invite` but no terminal (for example from a script). Set `SWITCHBOARD_INVITE` instead. |
 | `The --invite option doesn't take the invite on the command line, where other users can see it.` | You passed the invite itself after `--invite`. Set `SWITCHBOARD_INVITE` instead, or use `--invite` alone and paste the invite when asked. |
 | `Could not reach <host> (...)` | Check the machine's internet connection. |
+| `unmanaged command: ~/.local/bin/switchboard` | Something Switchboard didn't write is at the command's path (a file, or a link to anything but the old `~/bin/switchboard`). Move it aside if you don't need it, then install again. |
+| `! Left ~/bin/switchboard alone: Switchboard didn't write it` | A `~/bin/switchboard` of your own stays. If `~/bin` comes before `~/.local/bin` on your `PATH`, it runs instead of Switchboard; rename or remove it. |
+| `! Kept ~/bin/switchboard as a link to the command: ...` | The Claude Code plugin here is older than 0.3.1 and runs that path. Run `claude plugin marketplace update switchboard` (then `/reload-plugins` in open chats); the next install or upgrade removes the link. |
 
 Running the install command on a machine that is already set up only upgrades it. It restarts the
 bridge if it was running.
+
+**The command moved in 0.3.1.** The program is now `~/.local/bin/switchboard` itself; releases
+before it had a `~/bin/switchboard` script that ran a copy in `~/.local/share/switchboard`. The
+first install or upgrade to 0.3.1 moves the installation and removes what the earlier
+installers wrote there (the script, the old copy once the bridge no longer runs it, and the
+Python releases' files, by name), keeping the newest five installer backups. What changes for
+you:
+
+- **`switchboard: command not found`.** `~/.local/bin` isn't on your shell's `PATH` (`~/bin` may
+  have been). Run `switchboard init` and accept the offer to add it, or add
+  `export PATH="$HOME/.local/bin:$PATH"` to your shell's startup file yourself. Until then,
+  `~/.local/bin/switchboard` works.
+- **Tab completion stopped.** The line init added before 0.3.1 loads completion from
+  `~/bin/switchboard` and skips itself once that's gone. Run `switchboard init` on a terminal and
+  accept the offer to turn completion on again (or replace `$HOME/bin/switchboard` with
+  `$HOME/.local/bin/switchboard` in that line).
+- **`/switchboard` says `Switchboard isn't installed on this machine (~/bin/switchboard is
+  missing)`.** That's a plugin older than 0.3.1 on a machine where Claude Code couldn't be asked
+  about it during the install (for example, `claude` wasn't on `PATH`). Update the plugin with
+  `claude plugin marketplace update switchboard`, then `/reload-plugins`.
 
 ## Joining a server
 

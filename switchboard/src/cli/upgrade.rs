@@ -8,13 +8,15 @@
 //! `--force`; the current service is removed first, so the older installer
 //! can set up its own without two services running the bridge.
 //!
-//! `uninstall` stops the bridge and removes the service, the `switchboard`
-//! command, and the installed program. The configuration, this machine's key,
-//! chat membership, and the bridge's logs stay unless `--purge` is given.
+//! `uninstall` stops the bridge and removes the service and the program
+//! (`~/.local/bin/switchboard`, and what releases before 0.3.1 installed in
+//! its place, when an installer wrote it). The configuration, this
+//! machine's key, chat membership, and the bridge's logs stay unless
+//! `--purge` is given.
 
 use serde_json::{Map, Value};
 
-use super::install::{self, has_any_marker, legacy_paths, links_to, managed_service, paths, tilde};
+use super::install::{self, legacy_paths, links_to, managed_service, paths, tilde, Found};
 use super::machines::run_capture;
 use super::release::{self, Source, Version};
 use super::service;
@@ -173,6 +175,19 @@ pub fn upgrade(
             service::stop_current()?;
         }
         install::remove_service(&home).map(|_| ())?;
+        // Releases before 0.3.1 refuse a program at ~/.local/bin/switchboard
+        // (they link their ~/bin command there) and a link at
+        // ~/bin/switchboard; both are this installation's, and the copy above
+        // puts them back if the older installer fails.
+        if Version::parse(install::LOCAL_BIN_SINCE).is_some_and(|first| new < first) {
+            let p = paths(&home);
+            if install::program_state(&p) == Found::Ours {
+                fsutil::unlink(&p.program)?;
+            }
+            if install::old_command_state(&p) == Found::OurLink {
+                fsutil::unlink(&p.old_command)?;
+            }
+        }
     }
     let (code, stdout, stderr) = run_capture(
         &[binary.clone(), "install".into(), "--json".into()],
@@ -203,11 +218,20 @@ pub fn upgrade(
     };
     let mut restarted = installed.get("started") == Some(&Value::Bool(true));
     if was_running && !restarted {
+        // The installer says where it put the program (`source`, its
+        // directory); without that, where that version puts it.
+        let p = paths(&home);
         let program = installed
             .get("source")
             .and_then(Value::as_str)
             .map(|dir| fsutil::join(dir, install::BINARY))
-            .unwrap_or_else(|| fsutil::join(&paths(&home).destination, install::BINARY));
+            .unwrap_or(
+                if Version::parse(install::LOCAL_BIN_SINCE).is_some_and(|first| new < first) {
+                    p.old_program
+                } else {
+                    p.program
+                },
+            );
         for action in ["stop", "start"] {
             let (code, stdout, stderr) = run_capture(
                 &[
@@ -330,13 +354,13 @@ pub fn uninstall(purge: bool) -> Result<Map<String, Value>> {
         }
     }
     service::reload_units();
-    if links_to(&p.link, &p.wrapper) {
-        remove(&p.link, &mut removed)?;
+    // The command, and the command and link releases before 0.3.1 wrote;
+    // never a file of the same name that an installer didn't write.
+    if matches!(install::old_command_state(&p), Found::Ours | Found::OurLink) {
+        remove(&p.old_command, &mut removed)?;
     }
-    if fsutil::lstat(&p.wrapper).is_ok_and(|info| info.is_file())
-        && install::read_text(&p.wrapper).is_ok_and(|text| has_any_marker(&text))
-    {
-        remove(&p.wrapper, &mut removed)?;
+    if matches!(install::program_state(&p), Found::Ours | Found::OurLink) {
+        remove(&p.program, &mut removed)?;
     }
     let marker = fsutil::join(&p.destination, ".switchboard-install");
     let managed = fsutil::lstat(&marker).is_ok_and(|info| info.is_file())
@@ -350,6 +374,7 @@ pub fn uninstall(purge: bool) -> Result<Map<String, Value>> {
             for name in [install::BINARY, "backups"] {
                 remove(&fsutil::join(&p.destination, name), &mut removed)?;
             }
+            removed.extend(install::remove_python_files(&p)?);
         }
     }
     let config_dir = fsutil::join(&home, ".config/switchboard");

@@ -403,13 +403,13 @@ pub fn words(kind: &str, config_path: &str) -> Vec<String> {
 pub fn startup_line(shell: &str) -> Option<&'static str> {
     match shell {
         "zsh" => Some(
-            "[ -x \"$HOME/bin/switchboard\" ] && eval \"$(\"$HOME/bin/switchboard\" completion zsh)\"",
+            "[ -x \"$HOME/.local/bin/switchboard\" ] && eval \"$(\"$HOME/.local/bin/switchboard\" completion zsh)\"",
         ),
         "bash" => Some(
-            "[ -x \"$HOME/bin/switchboard\" ] && eval \"$(\"$HOME/bin/switchboard\" completion bash)\"",
+            "[ -x \"$HOME/.local/bin/switchboard\" ] && eval \"$(\"$HOME/.local/bin/switchboard\" completion bash)\"",
         ),
         "fish" => Some(
-            "test -x $HOME/bin/switchboard; and $HOME/bin/switchboard completion fish | source",
+            "test -x $HOME/.local/bin/switchboard; and $HOME/.local/bin/switchboard completion fish | source",
         ),
         _ => None,
     }
@@ -419,7 +419,9 @@ pub fn startup_line(shell: &str) -> Option<&'static str> {
 /// a line that runs `switchboard completion SHELL` (the command by any path,
 /// quoted or not) and evaluates its output (`eval`, `source`, or `.`).
 /// A line that only mentions the command, or writes the script to a file,
-/// doesn't count.
+/// doesn't count, and neither does one that runs `~/bin/switchboard`, where
+/// releases before 0.3.1 put the command (its guard skips it once the
+/// command has moved, so init offers the new line).
 pub fn already_loads(contents: &str) -> bool {
     contents.lines().any(loads_completion)
 }
@@ -435,7 +437,14 @@ fn loads_completion(line: &str) -> bool {
             let after = &line[at + call.len()..];
             let ends = after.is_empty() || after.starts_with([' ', ')', '"', '\'', '|', ';', '`']);
             let before = line[..at].trim_end().trim_end_matches(['"', '\'']);
-            ends && before.ends_with("switchboard")
+            let moved = [
+                "$HOME/bin/switchboard",
+                "${HOME}/bin/switchboard",
+                "~/bin/switchboard",
+            ]
+            .iter()
+            .any(|old| before.ends_with(old));
+            ends && before.ends_with("switchboard") && !moved
         })
     });
     let words: Vec<&str> = line
@@ -495,7 +504,8 @@ mod tests {
         for loads in [
             "eval \"$(switchboard completion zsh)\"",
             "source <(switchboard completion bash)",
-            ". <(\"$HOME/bin/switchboard\" completion bash)",
+            ". <(\"$HOME/.local/bin/switchboard\" completion bash)",
+            ". <(/usr/local/bin/switchboard completion bash)",
             "  switchboard completion fish | source",
             "command -v switchboard >/dev/null && eval \"$(switchboard completion zsh)\"",
         ] {
@@ -508,6 +518,9 @@ mod tests {
             "switchboard completion zsh > ~/.zfunc/_switchboard",
             "eval \"$(other-tool completion zsh)\" # switchboard",
             "source ~/switchboard/notes completion bash",
+            // The line releases before 0.3.1 added, for a command that moved.
+            "[ -x \"$HOME/bin/switchboard\" ] && eval \"$(\"$HOME/bin/switchboard\" completion zsh)\"",
+            "test -x $HOME/bin/switchboard; and $HOME/bin/switchboard completion fish | source",
         ] {
             assert!(!already_loads(other), "{other}");
         }

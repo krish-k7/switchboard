@@ -15,7 +15,7 @@
 //!
 //! Submodules: `join` (an invite to a running bridge), `server` (the server
 //! here, through sudo once), `configured` (rerunning on a set-up machine),
-//! `plugin` (the Claude Code plugin), `path` (offering to put ~/bin on PATH),
+//! `plugin` (the Claude Code plugin), `path` (offering to put ~/.local/bin on PATH),
 //! and `system` (host facts: addresses, DNS, commands on PATH).
 
 pub mod configured;
@@ -853,10 +853,11 @@ pub(crate) fn on_path(directory: &str) -> bool {
     })
 }
 
-/// Whether `switchboard` runs by name here (~/bin or ~/.local/bin on PATH).
+/// Whether `switchboard` runs by name here (~/.local/bin, where it is
+/// installed, is on PATH).
 pub(crate) fn command_on_path() -> bool {
     let home = super::local::home_dir();
-    on_path(&format!("{home}/bin")) || on_path(&format!("{home}/.local/bin"))
+    on_path(&format!("{home}/.local/bin"))
 }
 
 /// The command a chat runs to join, with or without the plugin.
@@ -866,7 +867,7 @@ fn join_command(plugin: bool) -> String {
     } else if command_on_path() {
         "!switchboard join".into()
     } else {
-        "!~/bin/switchboard join".into()
+        "!~/.local/bin/switchboard join".into()
     }
 }
 
@@ -875,7 +876,7 @@ fn switchboard() -> &'static str {
     if command_on_path() {
         "switchboard"
     } else {
-        "~/bin/switchboard"
+        "~/.local/bin/switchboard"
     }
 }
 

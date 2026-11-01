@@ -45,8 +45,8 @@ pub fn installed(claude: &str) -> Result<bool, String> {
     Ok(lists_switchboard(&value))
 }
 
-/// Whether a `claude plugin list --json` result has the plugin.
-pub fn lists_switchboard(value: &Value) -> bool {
+/// The Switchboard plugin's entries in a `claude plugin list --json` result.
+fn switchboard_entries(value: &Value) -> Vec<&Value> {
     let entries: Vec<&Value> = match value {
         Value::Array(items) => items.iter().collect(),
         Value::Object(map) => match map.get("plugins") {
@@ -55,14 +55,57 @@ pub fn lists_switchboard(value: &Value) -> bool {
         },
         _ => Vec::new(),
     };
-    entries.iter().any(|entry| {
-        ["id", "name", "plugin"].iter().any(|key| {
-            entry
-                .get(key)
-                .and_then(Value::as_str)
-                .is_some_and(|id| id == "switchboard" || id.starts_with("switchboard@"))
+    entries
+        .into_iter()
+        .filter(|entry| {
+            ["id", "name", "plugin"].iter().any(|key| {
+                entry
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| id == "switchboard" || id.starts_with("switchboard@"))
+            })
         })
+        .collect()
+}
+
+/// Whether a `claude plugin list --json` result has the plugin.
+pub fn lists_switchboard(value: &Value) -> bool {
+    !switchboard_entries(value).is_empty()
+}
+
+/// Whether a `claude plugin list --json` result has a Switchboard plugin
+/// older than `version` (or one whose version it doesn't say).
+pub fn lists_switchboard_before(value: &Value, version: &str) -> bool {
+    let Some(wanted) = super::super::release::Version::parse(version) else {
+        return false;
+    };
+    switchboard_entries(value).iter().any(|entry| {
+        entry
+            .get("version")
+            .and_then(Value::as_str)
+            .and_then(super::super::release::Version::parse)
+            .is_none_or(|found| found < wanted)
     })
+}
+
+/// Whether Claude Code has the Switchboard plugin at a version older than
+/// `version`, asked as `installed` asks.
+pub fn installed_before(claude: &str, version: &str) -> Result<bool, String> {
+    let (code, stdout, stderr) = system::run(
+        &[
+            claude.into(),
+            "plugin".into(),
+            "list".into(),
+            "--json".into(),
+        ],
+        Duration::from_secs(30),
+    )?;
+    if code != 0 {
+        return Err(first_line(&stderr, &stdout, "claude plugin list failed"));
+    }
+    let value: Value = serde_json::from_str(stdout.trim())
+        .map_err(|_| "claude plugin list --json printed something other than JSON".to_string())?;
+    Ok(lists_switchboard_before(&value, version))
 }
 
 fn first_line(stderr: &str, stdout: &str, fallback: &str) -> String {
@@ -222,6 +265,25 @@ mod tests {
         assert!(!lists_switchboard(&serde_json::json!([])));
         assert!(!lists_switchboard(
             &serde_json::json!([{"id": "switchboard-extra@x"}])
+        ));
+    }
+
+    #[test]
+    fn older_plugins_are_found_by_version() {
+        let list = |version: Value| serde_json::json!([{"id": "other@x", "version": "0.0.1"}, {"id": "switchboard@switchboard", "version": version}]);
+        assert!(lists_switchboard_before(&list("0.3.0".into()), "0.3.1"));
+        assert!(lists_switchboard_before(
+            &list("0.3.1-rc.1".into()),
+            "0.3.1"
+        ));
+        assert!(!lists_switchboard_before(&list("0.3.1".into()), "0.3.1"));
+        assert!(!lists_switchboard_before(&list("1.0.0".into()), "0.3.1"));
+        // A version it can't read may be an old one.
+        assert!(lists_switchboard_before(&list(Value::Null), "0.3.1"));
+        assert!(lists_switchboard_before(&list("unknown".into()), "0.3.1"));
+        assert!(!lists_switchboard_before(
+            &serde_json::json!([{"id": "other@x"}]),
+            "0.3.1"
         ));
     }
 }

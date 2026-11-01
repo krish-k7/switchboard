@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
@@ -942,7 +942,7 @@ fn upgrade_checks_downloads_and_keeps_tokens_off_other_hosts() {
     let mut env = Env::new();
     env.port = Some(server.port);
     assert_eq!(env.run(&["install"]).status.code(), Some(0));
-    let installed = env.home().join(".local/share/switchboard/switchboard");
+    let installed = env.home().join(".local/bin/switchboard");
     let before = std::fs::read(&installed).unwrap();
 
     // A missing release.
@@ -1051,7 +1051,7 @@ fn uninstall_keeps_user_data_unless_purged() {
         text.starts_with("✓ Stopped the bridge\n✓ Removed Switchboard from this machine:\n"),
         "{text}"
     );
-    assert!(text.contains("    ~/bin/switchboard\n"), "{text}");
+    assert!(text.contains("    ~/.local/bin/switchboard\n"), "{text}");
     assert!(text.contains(
         "  Kept this machine's configuration, key, chat membership, and logs:\n    ~/.config/switchboard\n    ~/.local/share/switchboard\n"
     ), "{text}");
@@ -1100,6 +1100,7 @@ fn uninstall_keeps_user_data_unless_purged() {
 
     // --purge removes the data too; an unmanaged command is left alone.
     assert_eq!(env.run(&["install"]).status.code(), Some(0));
+    std::fs::create_dir_all(home.join("bin")).unwrap();
     std::fs::write(home.join("bin/switchboard"), "#!/bin/sh\necho mine\n").unwrap();
     let output = env.run(&["cli", "uninstall", "--purge", "--json"]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
@@ -1126,7 +1127,7 @@ fn a_bridge_that_will_not_stop_blocks_uninstall() {
         "✗ Could not stop the bridge (Operation not permitted); nothing was removed.\n"
     );
     assert!(env.service_file(false).exists());
-    assert!(env.home().join("bin/switchboard").exists());
+    assert!(env.home().join(".local/bin/switchboard").exists());
 }
 
 #[test]
@@ -1138,7 +1139,7 @@ fn uninstalling_an_unused_installation_leaves_nothing_behind() {
     assert_eq!(json_out(&output)["kept"], json!([]));
     assert!(!env.home().join(".local/share/switchboard").exists());
     assert!(!env.home().join(".config/switchboard").exists());
-    assert!(!env.home().join("bin/switchboard").exists());
+    assert!(!env.home().join(".local/bin/switchboard").exists());
 }
 
 /// A configuration `status` and `doctor` can read: private, with a state
@@ -1534,4 +1535,465 @@ fn a_hanging_update_check_is_remembered() {
     std::fs::write(&cache, value.to_string()).unwrap();
     env.run(&["cli", "status"]);
     assert!(accepted.lock().unwrap().len() > asked);
+}
+
+// Moving an installation from before 0.3.1 ------------------------------------
+
+/// An installation as 0.3.0 left it, after Python releases before it: the
+/// program in ~/.local/share/switchboard, the ~/bin/switchboard wrapper,
+/// ~/.local/bin/switchboard linked to it, the service running the old copy,
+/// the Python modules and their bytecode, a file of the user's, and more
+/// backups than are kept. Returns the old program's path.
+fn write_030_install(env: &Env) -> PathBuf {
+    let home = env.home();
+    let share = home.join(".local/share/switchboard");
+    std::fs::create_dir_all(share.join("__pycache__")).unwrap();
+    std::fs::write(share.join(".switchboard-install"), "1\n").unwrap();
+    let old = share.join("switchboard");
+    let mut program = std::fs::read(binary()).unwrap();
+    program.extend_from_slice(b"\n0.3.0 copy\n");
+    std::fs::write(&old, program).unwrap();
+    std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o700)).unwrap();
+    for name in [
+        "bridge.py",
+        "native_peer.py",
+        "switchboard.py",
+        "machines_client.py",
+    ] {
+        std::fs::write(share.join(name), "# python\n").unwrap();
+    }
+    std::fs::write(share.join("__pycache__/bridge.cpython-312.pyc"), "pyc").unwrap();
+    std::fs::write(
+        share.join("__pycache__/native_peer.cpython-313.opt-1.pyc"),
+        "pyc",
+    )
+    .unwrap();
+    std::fs::write(share.join("notes.txt"), "mine\n").unwrap();
+    for index in 0..8 {
+        let folder = share.join(format!(
+            "backups/20261001T00000{index}-17592{index}0000000000000"
+        ));
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("switchboard"), "old").unwrap();
+    }
+    std::fs::create_dir_all(share.join("backups/kept-by-hand")).unwrap();
+    std::fs::create_dir_all(home.join("bin")).unwrap();
+    std::fs::write(
+        home.join("bin/switchboard"),
+        format!(
+            "#!/bin/sh\n# Managed by switchboard install\nexec {} cli \"$@\"\n",
+            old.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        home.join("bin/switchboard"),
+        std::fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    std::fs::create_dir_all(home.join(".local/bin")).unwrap();
+    std::os::unix::fs::symlink(
+        home.join("bin/switchboard"),
+        home.join(".local/bin/switchboard"),
+    )
+    .unwrap();
+    let service = env.service_file(false);
+    std::fs::create_dir_all(service.parent().unwrap()).unwrap();
+    let config = home.join(".config/switchboard/bridge.json");
+    let text = if LINUX {
+        switchboard::cli::install::systemd_unit(
+            &old.to_string_lossy(),
+            &share.to_string_lossy(),
+            &config.to_string_lossy(),
+        )
+    } else {
+        switchboard::cli::install::launch_agent(
+            &old.to_string_lossy(),
+            &share.to_string_lossy(),
+            &config.to_string_lossy(),
+        )
+    };
+    std::fs::write(&service, text).unwrap();
+    if LINUX {
+        let wants = service.parent().unwrap().join("default.target.wants");
+        std::fs::create_dir_all(&wants).unwrap();
+        std::os::unix::fs::symlink(&service, wants.join(UNIT)).unwrap();
+    }
+    old
+}
+
+fn gone(path: &std::path::Path) -> bool {
+    std::fs::symlink_metadata(path).is_err()
+}
+
+/// A fake `claude` whose plugin list has the Switchboard plugin at
+/// `version` (None: no plugin; "fail": the command fails).
+fn fake_claude(env: &Env, version: Option<&str>) {
+    let body = match version {
+        Some("fail") => "echo 'not logged in' >&2; exit 1".to_string(),
+        Some(version) => format!(
+            "echo '[{{\"id\": \"switchboard@switchboard\", \"version\": \"{version}\", \"scope\": \"user\"}}]'"
+        ),
+        None => "echo '[]'".to_string(),
+    };
+    env.write_exec(
+        "bin/claude",
+        &format!("#!/bin/sh\necho \"claude $*\" >> \"$SB_TEST/calls\"\n{body}\n"),
+    );
+}
+
+#[test]
+fn install_moves_a_030_installation_and_removes_only_what_installers_wrote() {
+    let env = Env::new();
+    let old = write_030_install(&env);
+    let home = env.home();
+    let share = home.join(".local/share/switchboard");
+    let output = env.run(&["install", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let result = json_out(&output);
+    let program = home.join(".local/bin/switchboard");
+    // The old link at the program's path became the program.
+    let info = std::fs::symlink_metadata(&program).unwrap();
+    assert!(info.file_type().is_file());
+    assert_eq!(
+        std::fs::read(&program).unwrap(),
+        std::fs::read(binary()).unwrap()
+    );
+    // The service runs it from there now.
+    let service = std::fs::read_to_string(env.service_file(false)).unwrap();
+    assert!(
+        service.contains(&program.to_string_lossy().to_string()),
+        "{service}"
+    );
+    assert!(
+        !service.contains(&old.to_string_lossy().to_string()),
+        "{service}"
+    );
+    // The wrapper, the old copy, the Python modules, and their bytecode are
+    // gone, by name; the user's files stay.
+    let mut removed: Vec<String> = result["removed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    removed.sort();
+    let mut expected: Vec<String> = [
+        home.join("bin/switchboard"),
+        old.clone(),
+        share.join("bridge.py"),
+        share.join("native_peer.py"),
+        share.join("switchboard.py"),
+        share.join("machines_client.py"),
+        share.join("__pycache__/bridge.cpython-312.pyc"),
+        share.join("__pycache__/native_peer.cpython-313.opt-1.pyc"),
+        share.join("__pycache__"),
+    ]
+    .iter()
+    .map(|p| p.to_string_lossy().into_owned())
+    .collect();
+    expected.sort();
+    assert_eq!(removed, expected);
+    for path in &expected {
+        assert!(gone(std::path::Path::new(path)), "{path}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(share.join("notes.txt")).unwrap(),
+        "mine\n"
+    );
+    // Backups: the newest five of the installer's (this run's among them),
+    // and a folder it didn't name.
+    assert_eq!(result["pruned_backups"], json!(4));
+    let mut backups: Vec<String> = std::fs::read_dir(share.join("backups"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    backups.sort();
+    assert_eq!(backups.len(), 6, "{backups:?}");
+    assert!(backups.contains(&"kept-by-hand".to_string()));
+    assert!(!backups
+        .iter()
+        .any(|b| b.starts_with("20261001T000000-") || b.starts_with("20261001T000003-")));
+    assert!(backups.iter().any(|b| b.starts_with("20261001T000007-")));
+    // The service manager was only asked whether the bridge runs.
+    let calls = env.calls();
+    assert!(
+        !calls.contains(" start") && !calls.contains("bootstrap"),
+        "{calls}"
+    );
+
+    // Again: nothing more to move, and nothing of the user's goes.
+    let output = env.run(&["install", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let again = json_out(&output);
+    assert!(again.get("removed").is_none(), "{again}");
+    assert_eq!(again["pruned_backups"], json!(1));
+    assert_eq!(
+        std::fs::read_to_string(share.join("notes.txt")).unwrap(),
+        "mine\n"
+    );
+    assert!(share.join("backups/kept-by-hand").exists());
+
+    // The human summary says what it removed.
+    std::fs::write(share.join("doctor.py"), "# python\n").unwrap();
+    let text = stdout(&env.run(&["install"]));
+    assert!(
+        text.starts_with(&format!(
+            "Installed switchboard {} as ~/.local/bin/switchboard.\n",
+            current_version()
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "Removed what earlier versions left:\n    ~/.local/share/switchboard/doctor.py\n"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn install_leaves_a_foreign_bin_command_alone() {
+    let env = Env::new();
+    write_030_install(&env);
+    let home = env.home();
+    let mine = "#!/bin/sh\necho mine\n";
+    std::fs::write(home.join("bin/switchboard"), mine).unwrap();
+    let output = env.run(&["install", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let result = json_out(&output);
+    assert_eq!(result["left"], json!(home.join("bin/switchboard")));
+    assert_eq!(
+        std::fs::read_to_string(home.join("bin/switchboard")).unwrap(),
+        mine
+    );
+    // A link of the user's there is left too, and so is one elsewhere that
+    // points at the program.
+    std::fs::remove_file(home.join("bin/switchboard")).unwrap();
+    std::os::unix::fs::symlink("/usr/bin/true", home.join("bin/switchboard")).unwrap();
+    let result = json_out(&env.run(&["install", "--json"]));
+    assert_eq!(result["left"], json!(home.join("bin/switchboard")));
+    assert_eq!(
+        std::fs::read_link(home.join("bin/switchboard")).unwrap(),
+        PathBuf::from("/usr/bin/true")
+    );
+    let text = stdout(&env.run(&["install"]));
+    assert!(text.contains("Left ~/bin/switchboard alone"), "{text}");
+    // Uninstalling leaves it as well.
+    let output = env.run(&["cli", "uninstall", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(std::fs::symlink_metadata(home.join("bin/switchboard")).is_ok());
+    assert!(gone(&home.join(".local/bin/switchboard")));
+}
+
+#[test]
+fn an_older_plugin_keeps_bin_switchboard_as_a_link_until_it_is_updated() {
+    let env = Env::new();
+    write_030_install(&env);
+    let home = env.home();
+    let old_command = home.join("bin/switchboard");
+    let program = home.join(".local/bin/switchboard");
+    fake_claude(&env, Some("0.3.0"));
+    let result = json_out(&env.run(&["install", "--json"]));
+    assert_eq!(result["plugin_link"], json!(old_command));
+    assert_eq!(std::fs::read_link(&old_command).unwrap(), program);
+    // The plugin's path runs the program.
+    let output = env.run_program(old_command.to_str().unwrap(), &["--version"]);
+    assert_eq!(
+        stdout(&output).trim(),
+        format!("switchboard {}", current_version())
+    );
+    // Claude Code that can't answer may still have the old plugin: kept.
+    fake_claude(&env, Some("fail"));
+    let result = json_out(&env.run(&["install", "--json"]));
+    assert_eq!(result["plugin_link"], json!(old_command));
+    assert!(std::fs::read_link(&old_command).is_ok());
+    // Once the plugin finds the command itself, the link goes.
+    fake_claude(&env, Some("0.3.1"));
+    let result = json_out(&env.run(&["install", "--json"]));
+    assert!(result.get("plugin_link").is_none(), "{result}");
+    assert_eq!(result["removed"], json!([old_command]));
+    assert!(gone(&old_command));
+    assert!(program.is_file());
+    // Without Claude Code on PATH there is no plugin to serve.
+    let env = Env::new();
+    write_030_install(&env);
+    let result = json_out(&env.run(&["install", "--json"]));
+    assert!(result.get("plugin_link").is_none(), "{result}");
+    assert!(gone(&env.home().join("bin/switchboard")));
+    // Uninstalling removes the link with the program.
+    let env = Env::new();
+    write_030_install(&env);
+    fake_claude(&env, Some("0.2.1"));
+    json_out(&env.run(&["install", "--json"]));
+    let output = env.run(&["cli", "uninstall", "--json"]);
+    let removed = json_out(&output)["removed"].clone();
+    assert!(removed
+        .as_array()
+        .unwrap()
+        .contains(&json!(env.home().join("bin/switchboard"))));
+    assert!(gone(&env.home().join("bin/switchboard")));
+    assert!(gone(&env.home().join(".local/bin/switchboard")));
+}
+
+#[test]
+fn a_running_bridge_keeps_the_old_copy_until_it_starts_from_the_new_place() {
+    let env = Env::new();
+    let old = write_030_install(&env);
+    let config = write_full_config(&env);
+    env.set_loaded(current(), true);
+    let output = env.run(&["install", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let result = json_out(&output);
+    assert_eq!(result["old_program_kept"], json!(old));
+    assert!(old.exists());
+    let text = stdout(&env.run(&["install"]));
+    assert!(
+        text.contains("The running bridge still uses ~/.local/share/switchboard/switchboard"),
+        "{text}"
+    );
+    // A bridge started from anywhere else leaves it.
+    let invalid = env.root.join("invalid.json");
+    std::fs::write(&invalid, "{}").unwrap();
+    std::fs::set_permissions(&invalid, std::fs::Permissions::from_mode(0o600)).unwrap();
+    env.run(&["bridge", "--config", invalid.to_str().unwrap()]);
+    assert!(old.exists());
+    // The service starting it from the program's place removes it, even
+    // when the bridge then stops for another reason.
+    let program = env.home().join(".local/bin/switchboard");
+    env.run_program(
+        program.to_str().unwrap(),
+        &["bridge", "--config", invalid.to_str().unwrap()],
+    );
+    assert!(gone(&old));
+    // A later install has nothing left to keep.
+    let result = json_out(&env.run(&["install", "--json"]));
+    assert!(result.get("old_program_kept").is_none(), "{result}");
+    assert!(config.exists());
+}
+
+#[test]
+fn a_machine_that_is_down_is_moved_and_stays_down() {
+    let env = Env::new();
+    let old = write_030_install(&env);
+    let config = write_full_config(&env);
+    let marker = config.parent().unwrap().join("down");
+    std::fs::write(&marker, "down\n").unwrap();
+    let wants = env
+        .home()
+        .join(".config/systemd/user/default.target.wants")
+        .join(UNIT);
+    if LINUX {
+        // `down` removed the enabling link.
+        std::fs::remove_file(&wants).unwrap();
+    }
+    env.clear_calls();
+    let output = env.run(&["install", "--start", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let result = json_out(&output);
+    assert_eq!(
+        (result["down"].clone(), result["started"].clone()),
+        (json!(true), json!(false))
+    );
+    assert!(gone(&old));
+    assert!(gone(&env.home().join("bin/switchboard")));
+    let service = std::fs::read_to_string(env.service_file(false)).unwrap();
+    assert!(service.contains(
+        &env.home()
+            .join(".local/bin/switchboard")
+            .to_string_lossy()
+            .to_string()
+    ));
+    assert!(marker.exists());
+    assert!(!env.loaded(current()));
+    if LINUX {
+        assert!(gone(&wants));
+    }
+    let calls = env.calls();
+    assert!(
+        !calls.contains("bootstrap")
+            && !calls.contains(&format!("start {UNIT}"))
+            && !calls.contains(" enable"),
+        "{calls}"
+    );
+}
+
+/// The upgrade writes the new program beside the old and renames it into
+/// place: a bridge running the old one keeps its file until it restarts.
+#[test]
+fn upgrade_replaces_the_running_program_in_one_step() {
+    let server = ReleaseServer::start();
+    let mut env = Env::new();
+    env.port = Some(server.port);
+    assert_eq!(env.run(&["install"]).status.code(), Some(0));
+    let program = env.home().join(".local/bin/switchboard");
+    // What the running bridge has open: a program that isn't this build.
+    let mut running = std::fs::read(binary()).unwrap();
+    running.extend_from_slice(b"\nthe running version\n");
+    std::fs::write(&program, &running).unwrap();
+    let held = std::fs::File::open(&program).unwrap();
+    let inode = std::fs::metadata(&program).unwrap().ino();
+    let config = env.home().join(".config/switchboard");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(config.join("bridge.json"), "{}").unwrap();
+    env.set_loaded(current(), true);
+    server.publish("99.0.0", binary());
+    *server.latest.lock().unwrap() = "99.0.0".into();
+    let output = env.run(&["cli", "upgrade", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(json_out(&output)["restarted"], json!(true));
+    // A new file at the path; the old one is intact for whoever holds it.
+    assert_ne!(std::fs::metadata(&program).unwrap().ino(), inode);
+    assert_eq!(
+        std::fs::read(&program).unwrap(),
+        std::fs::read(binary()).unwrap()
+    );
+    let mut kept = Vec::new();
+    std::io::Read::read_to_end(&mut &held, &mut kept).unwrap();
+    assert_eq!(kept, running);
+    // No temporary file is left beside it.
+    let beside: Vec<String> = std::fs::read_dir(program.parent().unwrap())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(beside, ["switchboard"]);
+}
+
+/// Moving back to a release before 0.3.1: its installer finds the way clear
+/// (it refuses a program or link at the paths it writes).
+#[test]
+fn a_downgrade_before_031_clears_the_new_layout_for_the_older_installer() {
+    let server = ReleaseServer::start();
+    let mut env = Env::new();
+    env.port = Some(server.port);
+    write_030_install(&env);
+    fake_claude(&env, Some("0.3.0"));
+    assert_eq!(env.run(&["install"]).status.code(), Some(0));
+    let home = env.home();
+    assert!(std::fs::read_link(home.join("bin/switchboard")).is_ok());
+    // An older stand-in refuses anything in its way, as 0.3.0 does.
+    server.publish_script(
+        "0.2.9",
+        "if [ \"$1\" = install ]; then\n\
+         if [ -e \"$HOME/.local/bin/switchboard\" ] || [ -L \"$HOME/bin/switchboard\" ]; then echo '{\"ok\": false, \"error\": \"unmanaged command\"}'; exit 1; fi\n\
+         printf '#!/bin/sh\\n# Managed by switchboard install\\n' > \"$HOME/bin/switchboard\"; ln -s \"$HOME/bin/switchboard\" \"$HOME/.local/bin/switchboard\"; echo '{}'; exit 0; fi",
+    );
+    let output = env.run(&["cli", "upgrade", "0.2.9", "--force", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(std::fs::read_link(home.join(".local/bin/switchboard")).is_ok());
+    // A failing older installer puts this version back.
+    assert_eq!(env.run(&["install"]).status.code(), Some(0));
+    server.publish_script(
+        "0.2.8",
+        "if [ \"$1\" = install ]; then echo '{\"ok\": false, \"error\": \"disk full\"}'; exit 1; fi",
+    );
+    let output = env.run(&["cli", "upgrade", "0.2.8", "--force"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("this version is still installed"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(home.join(".local/bin/switchboard").is_file());
+    assert!(env.service_file(false).exists());
 }

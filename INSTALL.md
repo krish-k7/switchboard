@@ -18,7 +18,7 @@ can follow them too; [README.md](README.md) is the shorter guide.
   the user into `switchboard init` in their own terminal, which asks for it without echo.
   Switchboard refuses an invite given as `--invite VALUE`.
 - If the user pastes an invite into the chat anyway, don't put it in a command. Have them run
-  `~/bin/switchboard init` in their own terminal and paste it there.
+  `~/.local/bin/switchboard init` in their own terminal and paste it there.
 - When a step fails, report the error exactly as printed and the step that failed.
 
 ## 1. Check this machine
@@ -26,7 +26,7 @@ can follow them too; [README.md](README.md) is the shorter guide.
 ```sh
 uname -sm
 claude --version
-~/bin/switchboard status
+~/.local/bin/switchboard status || ~/bin/switchboard status
 ```
 
 Switchboard runs on macOS and Linux, x86_64 or arm64. It needs `curl` (or `wget`) and Claude
@@ -34,12 +34,14 @@ Code installed and run at least once (the bridge needs `~/.claude`). If `claude`
 the user to install Claude Code and run it once. Its version is for the report only; don't upgrade
 or downgrade Claude Code because of it. No root access is needed on this machine.
 
-`~/bin/switchboard` doesn't exist before the first install. If it does, this machine was set up
+Neither command exists before the first install (`~/bin/switchboard` is where releases before
+0.3.1 put it; installing the current release moves it). If one does, this machine was set up
 before, and `server_url` in `~/.config/switchboard/bridge.json` is its server:
 
 - `status` starts with `✓ Connected to`: report that and stop, unless the user wants a change.
 - `status` says the bridge isn't running, or that the machine is down: it is set up but offline.
-  Run `~/bin/switchboard doctor` and report its fixes; run `switchboard up` only if the user asks.
+  Run `~/.local/bin/switchboard doctor` and report its fixes; run `switchboard up` only if the
+  user asks.
 - The user wants this machine on a different server: join that server in step 5 with `--replace`
   added to `init`. The current setup is moved aside, and put back if joining fails.
 
@@ -67,11 +69,11 @@ server and join it in one command (with `--tls acme --domain DOMAIN` in place of
 `--tls private --server-name ADDRESS` for a public domain):
 
 ```sh
-~/bin/switchboard init --server --join --tls private --server-name ADDRESS --no-plugin
+~/.local/bin/switchboard init --server --join --tls private --server-name ADDRESS --no-plugin
 ```
 
 It runs `sudo -n` once for the install. If sudo needs a password, have the user run
-`~/bin/switchboard init` in their own terminal and choose **Run the server and join it**. Then go
+`~/.local/bin/switchboard init` in their own terminal and choose **Run the server and join it**. Then go
 to step 6.
 
 ## 3. Check the server machine
@@ -163,9 +165,10 @@ curl -fsSL https://raw.githubusercontent.com/krish-k7/switchboard/main/install.s
 ```
 
 It downloads the release binary for this machine, checks it against the release's `SHA256SUMS`,
-and installs the program in `~/.local/share/switchboard`, the command `~/bin/switchboard` (linked
-from `~/.local/bin`), and the bridge's user service (a launchd agent on macOS, a systemd user
-unit on Linux), without starting it. Without a terminal it stops there, ending with `Next` and
+and installs it as the command `~/.local/bin/switchboard`, with the bridge's user service (a
+launchd agent on macOS, a systemd user unit on Linux, logging to `~/.local/share/switchboard`),
+without starting it. On a machine set up before 0.3.1 it moves the installation from
+`~/bin/switchboard`. Without a terminal it stops there, ending with `Next` and
 `switchboard init`.
 
 Then join with an invite, in one of two ways:
@@ -175,7 +178,7 @@ Then join with an invite, in one of two ways:
 
   ```sh
   ssh -o BatchMode=yes SERVER 'sudo -n /usr/local/bin/switchboard server invite --json' |
-      grep -o 'sbi1\.[A-Za-z0-9_-]*' | ~/bin/switchboard init --invite - --no-plugin
+      grep -o 'sbi1\.[A-Za-z0-9_-]*' | ~/.local/bin/switchboard init --invite - --no-plugin
   ```
 
   If `init` says `No invite on standard input`, the command on the server failed and printed its
@@ -188,7 +191,7 @@ Then join with an invite, in one of two ways:
   echo:
 
   ```sh
-  ~/bin/switchboard init
+  ~/.local/bin/switchboard init
   ```
 
 `init` checks the server's certificate against the invite (or, for a public domain, the system's
@@ -222,16 +225,16 @@ already in the environment; setting it in a command puts the invite on that comm
 Keep `~/.config/switchboard/` at mode 0700 and its files at 0600. Never print the private key or
 commit these files. Keys don't expire, so nothing needs renewing.
 
-`~/bin` may not be on the `PATH`. Use `~/bin/switchboard` directly, or add
-`export PATH="$HOME/bin:$PATH"` to the user's shell startup file only if they authorize that
-edit. For bash on macOS that is the first of `~/.bash_profile`, `~/.bash_login`, and `~/.profile`
+`~/.local/bin` may not be on the `PATH` (Claude Code's own installer uses it too, so it often is).
+Use `~/.local/bin/switchboard` directly, or add `export PATH="$HOME/.local/bin:$PATH"` to the
+user's shell startup file only if they authorize that edit. For bash on macOS that is the first of `~/.bash_profile`, `~/.bash_login`, and `~/.profile`
 that exists: making a new `~/.bash_profile` would stop bash from reading `~/.profile`.
 
 ## 6. Check the connection
 
 ```sh
-~/bin/switchboard status
-~/bin/switchboard doctor
+~/.local/bin/switchboard status
+~/.local/bin/switchboard doctor
 ```
 
 `status` should start with `✓ Connected to <server> as <machine>`. `doctor` should exit 0; on a
@@ -265,7 +268,7 @@ Report:
 
 - this machine's name, the server's address, and that it is connected;
 - what you installed on each machine: on the server (if you set it up), the mode, the address and
-  port, and the paths and service from step 4; on this machine, `~/bin/switchboard`,
+  port, and the paths and service from step 4; on this machine, `~/.local/bin/switchboard`,
   `~/.local/share/switchboard`, `~/.config/switchboard`, the bridge's service, and the rule file;
 - anything the user must still do, such as opening a firewall port;
 - how to add another machine: run the same setup there, with a new invite.
@@ -278,7 +281,7 @@ Then tell the user how to connect chats. In each chat they want connected, they 
 
 (or `/switchboard join` with the plugin). `!switchboard join research` sets the name other
 machines see; without a name, they see the chat's own name. If the chat's shell doesn't have
-`~/bin` on its `PATH`, use `!~/bin/switchboard join`. Claude can then use its own `ListAgents` and
+`~/.local/bin` on its `PATH`, use `!~/.local/bin/switchboard join`. Claude can then use its own `ListAgents` and
 `SendMessage` tools to reach chats on other machines. `!switchboard leave` disconnects the chat,
 and a joined chat leaves on its own after 7 days without activity.
 
@@ -299,8 +302,8 @@ other chat; that does not show it was read or acted on.
 - `switchboard down` takes the machine offline until `switchboard up`, across logins and
   restarts; upgrades and reinstalls leave it down. Run either only when the user asks.
   `switchboard logs` shows what the bridge has been doing.
-- `switchboard uninstall` stops the bridge and removes its service, the `switchboard` command and
-  its link, and the program and its installer backups. It keeps `~/.config/switchboard` (the
+- `switchboard uninstall` stops the bridge and removes its service, the program
+  (`~/.local/bin/switchboard`), and its installer backups. It keeps `~/.config/switchboard` (the
   configuration, this machine's key, and chat membership) and the logs in
   `~/.local/share/switchboard`. `--purge` deletes both directories as well, but not a
   configuration kept elsewhere through `SWITCHBOARD_CONFIG`. Neither removes the machine from the

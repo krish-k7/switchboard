@@ -64,7 +64,7 @@ fn view<'a>(
 
 fn doctor_report(ok: bool) -> Map<String, Value> {
     let mut checks = vec![
-        json!({"name": "program", "status": "pass", "summary": "Switchboard 0.3.0, installed in ~/bin."}),
+        json!({"name": "program", "status": "pass", "summary": "Switchboard 0.3.0, installed in ~/.local/bin."}),
         json!({"name": "configuration", "status": "pass", "summary": "Configuration and key are private and valid."}),
     ];
     if ok {
@@ -310,7 +310,7 @@ fn doctor_lists_problems_first_and_passes_one_per_line() {
     let plain = |doc: &Doc| render(doc, &Theme::plain(), 100).join("\n");
     assert_eq!(
         plain(&doctor(&doctor_report(true))),
-        "✓ Switchboard 0.3.0, installed in ~/bin.\n✓ Configuration and key are private and valid.\n✓ The bridge is running and connected.\n✓ The server knows this machine as laptop (owner k).\n\n  All checks passed."
+        "✓ Switchboard 0.3.0, installed in ~/.local/bin.\n✓ Configuration and key are private and valid.\n✓ The bridge is running and connected.\n✓ The server knows this machine as laptop (owner k).\n\n  All checks passed."
     );
     let problems = plain(&doctor(&doctor_report(false)));
     assert!(problems.starts_with("✗ The bridge isn't running.\n  To fix, run\n      switchboard up\n\n! Chats are found by polling"), "{problems}");

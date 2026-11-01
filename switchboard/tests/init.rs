@@ -346,7 +346,7 @@ fn joins_from_standard_input_and_reruns_show_the_state() {
         "✓ Joined the server as laptop",
         "Done. laptop joined localhost:",
         "switchboard up",
-        "~/bin isn't on your PATH",
+        "~/.local/bin isn't on your PATH",
     ] {
         assert!(shown.contains(line), "{line}\n{shown}");
     }
@@ -374,6 +374,65 @@ fn joins_from_standard_input_and_reruns_show_the_state() {
     assert!(machine
         .plugin_calls()
         .contains("plugin install switchboard --marketplace krish-k7/switchboard --json"));
+}
+
+/// The PATH offer is about ~/.local/bin, where the command is, and only
+/// when it isn't on PATH already (whatever else is).
+#[test]
+fn the_path_offer_appears_only_when_local_bin_is_missing() {
+    let temp = Temp::new();
+    let server = Server::start(&temp.0, "server");
+    let machine = Machine::new(&temp, "a");
+    let local_bin = machine.home().join(".local/bin");
+    let path = format!(
+        "{}:{}:/usr/bin:/bin",
+        machine.root.join("bin").display(),
+        local_bin.display()
+    );
+    let output = machine.run(
+        &[
+            "--invite",
+            "-",
+            "--name",
+            "laptop",
+            "--no-start",
+            "--no-plugin",
+        ],
+        &[("PATH", &path)],
+        &server.invite(&[]),
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert!(!text(&output).contains("on your PATH"), "{}", text(&output));
+    // ~/bin on PATH doesn't count: the command isn't there.
+    let other = Machine::new(&temp, "b");
+    let path = format!(
+        "{}:{}:/usr/bin:/bin",
+        other.root.join("bin").display(),
+        other.home().join("bin").display()
+    );
+    let output = other.run(
+        &[
+            "--invite",
+            "-",
+            "--name",
+            "desk",
+            "--no-start",
+            "--no-plugin",
+        ],
+        &[("PATH", &path)],
+        &server.invite(&[]),
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert!(
+        text(&output).contains("~/.local/bin isn't on your PATH"),
+        "{}",
+        text(&output)
+    );
+    assert!(
+        text(&output).contains("export PATH=\"$HOME/.local/bin:$PATH\""),
+        "{}",
+        text(&output)
+    );
 }
 
 #[test]

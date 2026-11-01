@@ -7,10 +7,11 @@
 #
 # It downloads the release binary for this OS and architecture with the
 # release's SHA256SUMS, checks the checksum, and runs `switchboard install`,
-# which copies the binary to ~/.local/share/switchboard, writes the
-# ~/bin/switchboard command, and installs the bridge's user service (launchd
-# on macOS, systemd on Linux) without starting it. Running it again upgrades
-# in place; once installed, `switchboard upgrade` does the same.
+# which puts the binary at ~/.local/bin/switchboard (the command itself) and
+# installs the bridge's user service (launchd on macOS, systemd on Linux)
+# without starting it. Running it again upgrades in place, and moves an
+# installation from before 0.3.1 (which had the command in ~/bin); once
+# installed, `switchboard upgrade` does the same.
 #
 # Then it starts `switchboard init` on the terminal (read from /dev/tty, so
 # `curl | sh` works), which joins this machine to a server with an invite,
@@ -243,6 +244,30 @@ has_up() {
     [ "$up_major" -gt 0 ] || [ "$up_minor" -ge 3 ]
 }
 
+# at_least VERSION_LINE MAJOR MINOR PATCH: whether a `switchboard --version`
+# line names that version or a later one (a pre-release of it counts as
+# earlier only when it is the same version, which is close enough here).
+at_least() {
+    v=${1#switchboard }
+    v=${v#v}
+    v=${v%%[-+]*}
+    v_major=${v%%.*}
+    v_rest=${v#*.}
+    v_minor=${v_rest%%.*}
+    v_patch=${v_rest#*.}
+    for part in "$v_major" "$v_minor" "$v_patch"; do
+        case $part in '' | *[!0-9]*) return 1 ;; esac
+    done
+    [ "$v_major" -ne "$2" ] && { [ "$v_major" -gt "$2" ]; return; }
+    [ "$v_minor" -ne "$3" ] && { [ "$v_minor" -gt "$3" ]; return; }
+    [ "$v_patch" -ge "$4" ]
+}
+
+# The line in every Switchboard binary and in the command scripts releases
+# before 0.3.1 wrote: what marks a file at the command's path as one an
+# installer put there.
+marker='# Managed by switchboard install'
+
 # Whether this process can reach a terminal.
 has_terminal() { (exec < /dev/tty) 2>/dev/null && [ -t 2 ]; }
 
@@ -445,14 +470,51 @@ main() {
 
     settle
     done_line "Downloaded $shown and checked it against the release's checksums"
-    "$tmp/$asset" install > "$tmp/install.out" ||
-        fail "Could not install $shown." "follow the message above, then run this again."
-    done_line "Installed the switchboard command in ~/bin"
-
-    case ":$PATH:" in
-        *":$HOME/bin:"* | *":$HOME/.local/bin:"*) command=switchboard ;;
-        *) command="$HOME/bin/switchboard" ;;
-    esac
+    if at_least "$installed" 0 3 1; then
+        # 0.3.1 and later: the command is the program, in ~/.local/bin.
+        program=$HOME/.local/bin/switchboard
+        "$tmp/$asset" install --json > "$tmp/install.out" ||
+            fail "Could not install $shown$(reported "$tmp/install.out")." "fix that, then run this again."
+        done_line "Installed the switchboard command in ~/.local/bin"
+        if grep -q '^  "removed":' "$tmp/install.out"; then
+            done_line "Removed what earlier versions installed in ~/bin and ~/.local/share/switchboard"
+        fi
+        if grep -q '^  "plugin_link":' "$tmp/install.out"; then
+            warn_line "Kept ~/bin/switchboard as a link to the command: this machine's Claude Code plugin is older than 0.3.1 and runs that path"
+            text "$color" 0 "Update the plugin with \`claude plugin marketplace update switchboard\`; the next upgrade removes the link."
+        fi
+        if grep -q '^  "left":' "$tmp/install.out"; then
+            warn_line "Left ~/bin/switchboard alone: Switchboard didn't write it"
+            text "$color" 0 "If ~/bin comes before ~/.local/bin on your PATH, it runs instead of switchboard."
+        fi
+        if grep -q '^  "cleanup_failed":' "$tmp/install.out"; then
+            warn_line "Couldn't remove everything earlier versions left; \`switchboard install\` says what"
+        fi
+        case ":$PATH:" in
+            *":$HOME/.local/bin:"*) command=switchboard ;;
+            *) command=$program ;;
+        esac
+    else
+        # An earlier release, pinned: it writes the command to ~/bin and
+        # refuses a program or link of a later release in its way, so those
+        # (and only files an installer wrote) go first.
+        program=$HOME/bin/switchboard
+        if [ -f "$HOME/.local/bin/switchboard" ] && [ ! -L "$HOME/.local/bin/switchboard" ] &&
+            grep -q -F "$marker" "$HOME/.local/bin/switchboard" 2>/dev/null; then
+            rm -f "$HOME/.local/bin/switchboard"
+        fi
+        if [ -L "$HOME/bin/switchboard" ] &&
+            [ "$(readlink "$HOME/bin/switchboard")" = "$HOME/.local/bin/switchboard" ]; then
+            rm -f "$HOME/bin/switchboard"
+        fi
+        "$tmp/$asset" install > "$tmp/install.out" ||
+            fail "Could not install $shown." "follow the message above, then run this again."
+        done_line "Installed the switchboard command in ~/bin"
+        case ":$PATH:" in
+            *":$HOME/bin:"* | *":$HOME/.local/bin:"*) command=switchboard ;;
+            *) command=$program ;;
+        esac
+    fi
     # Releases before 0.3 call up and down start and stop (0.3 and later
     # still take those names, so an unreadable version gets them too).
     up=start down=stop
@@ -461,10 +523,10 @@ main() {
         case $bridge in
             running)
                 spin "Restarting the bridge"
-                "$HOME/bin/switchboard" $down --json > "$tmp/restart.out" 2>&1 ||
+                "$program" $down --json > "$tmp/restart.out" 2>&1 ||
                     fail "Could not stop the bridge to restart it on $shown$(reported "$tmp/restart.out")." \
                         "run \`$command doctor\` to see why, then \`$command $down\` and \`$command $up\`."
-                "$HOME/bin/switchboard" $up --json > "$tmp/restart.out" 2>&1 ||
+                "$program" $up --json > "$tmp/restart.out" 2>&1 ||
                     fail "The bridge stopped but did not start again$(reported "$tmp/restart.out")." \
                         "run \`$command doctor\` to see why, then \`$command $up\`."
                 settle
@@ -497,14 +559,14 @@ main() {
         # init takes over the terminal; the download is no longer needed.
         cleanup
         trap - EXIT HUP INT TERM
-        exec "$HOME/bin/switchboard" init "$@" < /dev/tty
+        exec "$program" init "$@" < /dev/tty
     fi
     if [ $# -gt 0 ] || [ -n "$invite" ]; then
         # No terminal: init asks nothing, and stops on a missing answer,
         # naming the option. SWITCHBOARD_INVITE reaches it in the environment.
         cleanup
         trap - EXIT HUP INT TERM
-        exec "$HOME/bin/switchboard" init "$@" < /dev/null
+        exec "$program" init "$@" < /dev/null
     fi
     say ""
     text "$color" 1 "Next"

@@ -49,12 +49,15 @@ async function executable($, request) {
   try { home = await $.env.get('HOME') } catch { throw new CommandError('Your home directory isn’t available, so Switchboard can’t be found. Check HOME in a terminal.') }
   check()
   if (typeof home !== 'string' || !home.startsWith('/')) throw new CommandError('Your home directory isn’t available, so Switchboard can’t be found. Check HOME in a terminal.')
-  const path = home.replace(/\/$/, '') + '/bin/switchboard'
-  let exists
-  try { exists = await $.fs.exists(path) } catch { throw new CommandError('Switchboard can’t check ~/bin/switchboard. Check its permissions in a terminal.') }
-  check()
-  if (!exists) throw new CommandError('Switchboard isn’t installed on this machine (~/bin/switchboard is missing). To install it, run this in a terminal:', INSTALL)
-  return path
+  // Where the installer puts the command, then where releases before 0.3.1 put it.
+  for (const where of ['.local/bin/switchboard', 'bin/switchboard']) {
+    const path = home.replace(/\/$/, '') + '/' + where
+    let exists
+    try { exists = await $.fs.exists(path) } catch { throw new CommandError('Switchboard can’t check ~/' + where + '. Check its permissions in a terminal.') }
+    check()
+    if (exists) return path
+  }
+  throw new CommandError('Switchboard isn’t installed on this machine (~/.local/bin/switchboard is missing). To install it, run this in a terminal:', INSTALL)
 }
 
 // A CLI from before --display (0.2 and earlier) refuses the newer options;

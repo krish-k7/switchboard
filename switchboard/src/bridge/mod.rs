@@ -2600,6 +2600,10 @@ pub fn main(argv: &[String]) -> i32 {
         eprintln!("{}", missing_config_line(&config));
         return 1;
     }
+    // Started by a service that runs the program from its own place: the
+    // copy releases before 0.3.1 ran is no longer used (installing leaves it
+    // while a bridge runs from it).
+    crate::cli::install::finish_move();
     let mut bridge = match Bridge::new(&config, Arc::new(log_line)) {
         Ok(bridge) => bridge,
         Err(error) => {

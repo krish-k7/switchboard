@@ -23,7 +23,7 @@
 # service managers really run the bridge (as you, from the sandboxed HOME), so
 # init sees it connect; the fake claude only records the plugin install, and
 # the fake sudo refuses. Nothing
-# reaches the real launchd or systemd, your ~/.config or ~/bin, your Claude
+# reaches the real launchd or systemd, your ~/.config or ~/.local/bin, your Claude
 # Code settings, or any real server. Everything is stopped and removed on
 # exit.
 set -euo pipefail
@@ -78,7 +78,7 @@ start() {
     running && return 0
     umask 077
     mkdir -p "\$HOME/.local/share/switchboard"
-    nohup "\$HOME/.local/share/switchboard/switchboard" bridge --config "\$HOME/.config/switchboard/bridge.json" \\
+    nohup "\$HOME/.local/bin/switchboard" bridge --config "\$HOME/.config/switchboard/bridge.json" \\
         >> "\$HOME/.local/share/switchboard/daemon.log" 2>> "\$HOME/.local/share/switchboard/daemon-error.log" &
     echo \$! > "\$pidfile"
 }
