@@ -9,6 +9,7 @@
 //! backoff's cap bounds the delay.
 
 use std::os::fd::RawFd;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 pub type Hint = Arc<dyn Fn() + Send + Sync>;
@@ -32,6 +33,8 @@ extern "C" {
 pub struct NetWatcher {
     wake_write: RawFd,
     thread: Option<std::thread::JoinHandle<()>>,
+    /// Cleared when the thread stops on its own (a descriptor error).
+    running: Arc<AtomicBool>,
 }
 
 /// The source of change notices: a readable descriptor and how to release it.
@@ -174,6 +177,8 @@ impl NetWatcher {
             unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
         }
         let wake_read = pipe[0];
+        let running = Arc::new(AtomicBool::new(true));
+        let alive = running.clone();
         let spawned = std::thread::Builder::new()
             .name("switchboard-network".into())
             .stack_size(128 * 1024)
@@ -210,6 +215,7 @@ impl NetWatcher {
                         hint();
                     }
                 }
+                alive.store(false, Ordering::SeqCst);
                 source.close();
                 // SAFETY: the read end belongs to this thread.
                 unsafe { libc::close(wake_read) };
@@ -218,6 +224,7 @@ impl NetWatcher {
             Ok(thread) => Some(NetWatcher {
                 wake_write: pipe[1],
                 thread: Some(thread),
+                running,
             }),
             Err(_) => {
                 // The closure (and with it the source and read end) was dropped
@@ -230,6 +237,11 @@ impl NetWatcher {
                 None
             }
         }
+    }
+
+    /// Whether the thread is still watching.
+    pub fn healthy(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
     }
 
     /// Stop the thread and release its descriptors.

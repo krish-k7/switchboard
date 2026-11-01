@@ -1879,3 +1879,39 @@ fn an_offline_bridge_sleeps_between_attempts() {
     // The poll thread woke once: for the stop.
     assert!(shared.poll_waits.load(Ordering::Relaxed) <= 1);
 }
+
+/// A network that keeps changing retries the server at most once per
+/// NETWORK_RETRY_INTERVAL; a local file change after a local error is looked
+/// at within 2 seconds however long the backoff has grown.
+#[test]
+fn network_churn_and_local_errors_cannot_defeat_or_stall_the_backoff() {
+    let mut f = Fixture::new();
+    f.discover_returns(&[]);
+    f.hub.lock().unwrap().fail = Some(HubError::Os("server unreachable".into()));
+    for _ in 0..6 {
+        f.retry();
+    }
+    let now = *f.clock.lock().unwrap();
+    assert!(f.bridge.reconnect_at - now >= 30.0);
+    f.bridge.handle(Event::Network).unwrap();
+    assert!(f.bridge.reconnect_at - now <= 1.0);
+    // The retry fails; more network changes within the interval wait it out.
+    f.retry();
+    let now = *f.clock.lock().unwrap();
+    let after_failure = f.bridge.reconnect_at;
+    f.bridge.handle(Event::Network).unwrap();
+    assert_eq!(f.bridge.reconnect_at, after_failure);
+    *f.clock.lock().unwrap() = now + NETWORK_RETRY_INTERVAL;
+    f.bridge.handle(Event::Network).unwrap();
+    assert!(f.bridge.reconnect_at - (now + NETWORK_RETRY_INTERVAL) <= 1.0);
+    // A local error backs reconciliation off, but a file change brings the
+    // next look within 2 seconds.
+    f.bridge.retry_at = now + 60.0;
+    f.bridge.watcher = Some(
+        watch::DiscoveryWatcher::new(&s(&f.path), &s(&f.config_dir), Arc::new(|| {})).unwrap(),
+    );
+    assert!(f.bridge.watcher.as_ref().unwrap().healthy());
+    f.bridge.handle(Event::Discovery).unwrap();
+    assert!(f.bridge.retry_at - *f.clock.lock().unwrap() <= 2.0);
+    f.bridge.close_watcher();
+}

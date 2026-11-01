@@ -401,8 +401,9 @@ keeps its correlation so a later native receipt can still be relayed.
 - **Reconnecting.** After a lost connection or a failed registration the bridge registers again
   after 1 to 2 seconds, doubling the wait after each failure in a row up to 30 to 60 seconds (each
   wait is scaled by a random factor between one half and one). An answered poll resets it; a
-  network configuration change retries within a second. A poll the server rejects without ending
-  the connection is retried on the same schedule.
+  network configuration change retries within a second (at most once every 10 seconds). A poll
+  the server rejects without ending the connection is retried after 1 to 2 seconds, then at most
+  every 4 seconds.
 - **Connections.** At most eight cached or active HTTPS connections, idle expiry after 30 seconds,
   replacement after 60 seconds of age, a 15-second timeout per socket operation, and no automatic
   retry of a failed request.

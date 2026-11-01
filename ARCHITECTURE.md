@@ -95,7 +95,8 @@ with exponential backoff: the first retry after 1 to 2 seconds, then double the 
 most 30 to 60 seconds (a random factor spreads machines that lost the server together). An answered
 poll resets the backoff. A change in the machine's network configuration (the system
 configuration's `network_change` notification on macOS, netlink link and address changes on Linux)
-retries within a second, so a returning network is noticed at once; when only the server comes
+retries within a second (at most once every 10 seconds, so a network that keeps changing can't
+defeat the backoff), so a returning network is noticed at once; when only the server comes
 back, the bridge notices within 60 seconds. Local discovery keeps running meanwhile. `runtime.json`
 is rewritten only when what it says changes.
 

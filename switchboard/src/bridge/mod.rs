@@ -58,6 +58,11 @@ pub const BRIDGE_CAPABILITIES: [&str; 2] = ["ack", "ping"];
 /// Uncertain sends are resent for this long; after it the sender is told.
 pub const RESEND_WINDOW: f64 = 25.0;
 pub const RESEND_NOTICE_WINDOW: f64 = 600.0;
+/// The longest wait before polling again after the server rejected a poll
+/// without ending the connection.
+const POLL_RETRY_CAP: f64 = 4.0;
+/// Network changes retry the server at most this often.
+const NETWORK_RETRY_INTERVAL: f64 = 10.0;
 const ACTIVITY_STATES: [&str; 4] = ["idle", "busy", "waiting", "shell"];
 
 /// The HTTP status each server rejection is answered with before the
@@ -588,6 +593,8 @@ pub struct Bridge {
     /// Failures in a row since the server last answered a poll.
     reconnect: backoff::Backoff,
     network: Option<netwatch::NetWatcher>,
+    /// No network-change retry before this.
+    network_retry_after: f64,
     pending: IndexMap<Tag, Meta>,
     registration_inflight: Option<Tag>,
     desired_sessions: Option<Vec<Value>>,
@@ -785,6 +792,7 @@ impl Bridge {
             reconnect_at: 0.0,
             reconnect: backoff::Backoff::default(),
             network: None,
+            network_retry_after: 0.0,
             pending: IndexMap::new(),
             registration_inflight: None,
             desired_sessions: None,
@@ -1200,6 +1208,15 @@ impl Bridge {
         Ok(())
     }
 
+    /// Start the network-change watcher, or restart one that stopped.
+    fn watch_network(&mut self) {
+        if self.network.as_ref().is_some_and(|n| n.healthy()) {
+            return;
+        }
+        let hint = self.shared.clone();
+        self.network = netwatch::NetWatcher::new(Arc::new(move || hint.network_hint()));
+    }
+
     fn close_watcher(&mut self) {
         if let Some(mut watcher) = self.watcher.take() {
             watcher.close();
@@ -1228,6 +1245,7 @@ impl Bridge {
                 Err(error) => failure = Some(error.message),
             }
         }
+        self.watch_network();
         self.register()?;
         let healthy = self.watcher.as_ref().is_some_and(|w| w.healthy());
         let mode = if healthy { "events" } else { "polling" };
@@ -2249,6 +2267,9 @@ impl Bridge {
                 *self.shared.discovery_pending.lock().expect("discovery") = false;
                 if self.watcher.as_ref().is_some_and(|w| w.healthy()) {
                     self.next_scan = 0.0;
+                    // A local change may have cleared a local error: look
+                    // again within 2 seconds, as before backing off.
+                    self.retry_at = self.retry_at.min(self.now() + 2.0);
                 } else {
                     // A failed constructor also notifies; never turn its retry
                     // into a self-triggering scan loop on unsupported systems.
@@ -2278,11 +2299,16 @@ impl Bridge {
                 // Offline and waiting out the backoff: the network that was
                 // missing may be back, so try again soon (after a second for
                 // addresses and name service to settle), backing off afresh.
-                if !self.online {
-                    self.reconnect.reset();
-                    let soon = self.now() + 1.0;
+                // At most one such retry per NETWORK_RETRY_INTERVAL, so a
+                // network that keeps changing cannot defeat the backoff.
+                let now = self.now();
+                if !self.online && now >= self.network_retry_after {
+                    let soon = now + 1.0;
                     if self.reconnect_at > soon {
+                        self.network_retry_after = now + NETWORK_RETRY_INTERVAL;
+                        self.reconnect.reset();
                         self.reconnect_at = soon;
+                        self.retry_at = self.retry_at.min(soon);
                         self.next_scan = self.next_scan.min(soon);
                     }
                 }
@@ -2551,9 +2577,10 @@ impl Bridge {
                     shared.stop.set();
                 }
                 // The main loop withdraws (a new cursor, or none) after a lost
-                // connection; a failure that leaves the cursor alone is retried
-                // after a growing delay.
-                shared.wait_poll_change(&snapshot, backoff.next_delay());
+                // connection. A poll the server rejected leaves the cursor
+                // alone while the bridge stays online, so it is retried within
+                // a few seconds (messages wait on it), never longer.
+                shared.wait_poll_change(&snapshot, backoff.next_delay().min(POLL_RETRY_CAP));
             }
         }
     }
@@ -2593,8 +2620,6 @@ impl Bridge {
             }
             _ => return Err(Error::value("bridge has no server transport")),
         };
-        let hint = self.shared.clone();
-        self.network = netwatch::NetWatcher::new(Arc::new(move || hint.network_hint()));
         self.poller = Some(
             std::thread::Builder::new()
                 .name("switchboard-poll".into())
