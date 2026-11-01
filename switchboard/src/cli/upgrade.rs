@@ -482,7 +482,7 @@ pub fn uninstall_lines(result: &Map<String, Value>) -> Vec<String> {
         ));
         lines.extend(super::ui::command(
             &theme,
-            &format!("sudo switchboard server revoke {machine}"),
+            &format!("{} server revoke {machine}", crate::server::install::SUDO),
             width,
         ));
     }

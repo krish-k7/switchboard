@@ -90,7 +90,9 @@ test -e /etc/systemd/system/switchboard-server.service && echo server-installed 
   their own terminal to accept the host key.
 - The server needs Linux, x86_64 or arm64, running systemd: `no-systemd` rules the machine out.
 - `root` means you log in as root: leave `sudo -n` out of every command on the server.
-- `sudo-ok` means you can run `sudo -n` there. With `sudo-needs-password`, sudo asks for a password
+- `sudo-ok` means you can run `sudo -n` there. The commands here call the server's program by its
+  full path, `/usr/local/bin/switchboard`, because some distributions' sudo doesn't search
+  `/usr/local/bin`. With `sudo-needs-password`, sudo asks for a password
   you can't type. The user then runs step 4's commands in their own terminal, with `ssh -t` in
   place of `ssh -o BatchMode=yes` and `sudo` in place of `sudo -n` (for example
   `ssh -t SERVER 'sudo /usr/local/bin/switchboard server status'`), and joins this machine the

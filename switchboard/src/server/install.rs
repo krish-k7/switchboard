@@ -6,7 +6,13 @@
 //! server config and the systemd unit for the chosen listener, and starts the
 //! service. While no machine has joined it prints an invite for the first
 //! one (single use, for an hour): `switchboard init` on that machine asks
-//! for it and joins.
+//! for it and joins. `--no-invite` skips it, for setups that make their own.
+//!
+//! The command is linked from `/usr/local/bin/switchboard`. Some
+//! distributions' sudo resets PATH to a `secure_path` without
+//! `/usr/local/bin`, where `sudo switchboard` isn't found; the installer
+//! asks sudo, notes the answer in the program's marker, and the server's
+//! hints then name the full path (`sudo_switchboard`).
 //!
 //! Listener modes:
 //! - `--tls acme --domain NAME`: public certificates through ACME
@@ -727,6 +733,95 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The line in the program's marker that says sudo doesn't find
+/// `switchboard` by name.
+const SUDO_FULL_PATH: &str = "sudo-needs-full-path";
+
+/// The program marker's text.
+fn program_marker(full_path: bool) -> String {
+    if full_path {
+        format!("1\n{SUDO_FULL_PATH}\n")
+    } else {
+        "1\n".into()
+    }
+}
+
+/// What `sudo -n sh -c 'command -v switchboard || echo NOT-FOUND'` said:
+/// whether hints need the full path. Found at the link: no. Not found, or
+/// found elsewhere (another program of that name comes first): yes. A sudo
+/// that refused (one that needs a terminal, say) can't tell, and the full
+/// path works whatever its PATH is.
+fn probe_needs_full_path(succeeded: bool, output: &str) -> bool {
+    let last = output.lines().last().unwrap_or("").trim();
+    !(succeeded && last == LINK)
+}
+
+/// Whether `sudo switchboard` misses this program: sudo resets PATH to its
+/// `secure_path` when one is set (some distributions leave
+/// `/usr/local/bin` out), else keeps the caller's, so it is asked with the
+/// PATH a person's shell has. Root needs no password for it. Without sudo
+/// there is nothing to say.
+fn sudo_needs_full_path() -> bool {
+    let Some(sudo) = ["/usr/bin/sudo", "/bin/sudo", "/usr/local/bin/sudo"]
+        .into_iter()
+        .find(|path| exists(path))
+    else {
+        return false;
+    };
+    let Ok(output) = Command::new(sudo)
+        .args([
+            "-n",
+            "/bin/sh",
+            "-c",
+            "command -v switchboard || echo switchboard-not-found",
+        ])
+        .env_clear()
+        .env(
+            "PATH",
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        )
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return true;
+    };
+    probe_needs_full_path(
+        output.status.success(),
+        &String::from_utf8_lossy(&output.stdout),
+    )
+}
+
+/// How a person runs the server's commands with sudo on this machine:
+/// `sudo switchboard`, or `sudo /usr/local/bin/switchboard` where the
+/// installer found sudo doesn't find it by name. Every hint about the
+/// server that this machine prints uses it.
+pub fn sudo_switchboard() -> &'static str {
+    static FOUND: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    FOUND.get_or_init(|| sudo_command(std::fs::read_to_string(PROGRAM_MARKER).ok().as_deref()))
+}
+
+/// `sudo_switchboard`, to write as `{SUDO}` in a format string.
+pub struct Sudo;
+
+impl std::fmt::Display for Sudo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(sudo_switchboard())
+    }
+}
+
+pub const SUDO: Sudo = Sudo;
+
+/// `sudo_switchboard` for a marker's text.
+fn sudo_command(marker: Option<&str>) -> &'static str {
+    if marker.is_some_and(|text| text.lines().any(|line| line == SUDO_FULL_PATH)) {
+        "sudo /usr/local/bin/switchboard"
+    } else {
+        "sudo switchboard"
+    }
+}
+
 /// What the installation did, for the summary.
 pub(crate) struct Outcome {
     pub changed: Vec<String>,
@@ -817,9 +912,13 @@ pub(crate) fn install(options: &Options) -> Result<Outcome, String> {
         }
     };
 
-    // The program.
+    // The program. The marker is there before anything else, so a run that
+    // stops halfway leaves a directory the next run knows as its own; what
+    // sudo finds is noted in it once the link is in place.
     directory(PROGRAM_DIR, 0, 0, 0o755)?;
-    note(PROGRAM_MARKER, put(PROGRAM_MARKER, b"1\n", 0, 0, 0o644)?);
+    if !exists(PROGRAM_MARKER) {
+        note(PROGRAM_MARKER, put(PROGRAM_MARKER, b"1\n", 0, 0, 0o644)?);
+    }
     let binary = std::env::current_exe()
         .and_then(std::fs::read)
         .map_err(|exc| format!("cannot read the running binary: {exc}"))?;
@@ -829,6 +928,11 @@ pub(crate) fn install(options: &Options) -> Result<Outcome, String> {
         std::os::unix::fs::symlink(PROGRAM, LINK).map_err(|exc| format!("{LINK}: {exc}"))?;
         note(LINK, true);
     }
+    let marker = program_marker(sudo_needs_full_path());
+    note(
+        PROGRAM_MARKER,
+        put(PROGRAM_MARKER, marker.as_bytes(), 0, 0, 0o644)?,
+    );
 
     // State and the registry.
     directory(STATE, uid, gid, 0o700)?;
@@ -1313,8 +1417,8 @@ fn human_outcome(options: &Options, outcome: &Outcome) -> String {
             &theme,
             &Problem::new("The certificate changed to cover the new names, so machines that joined before can't connect.")
                 .steps([
-                    "Make a new invite for each of them with\n`sudo switchboard server invite`",
-                    "On each one, run this, choose to join again, and paste the invite:\n`switchboard init`",
+                    format!("Make a new invite for each of them with\n`{SUDO} server invite`"),
+                    "On each one, run this, choose to join again, and paste the invite:\n`switchboard init`".to_string(),
                 ]),
             width,
         ));
@@ -1358,9 +1462,9 @@ fn human_outcome(options: &Options, outcome: &Outcome) -> String {
         }
         None => {
             let command = if options.mode == Some(Mode::Caddy) && options.domain.is_none() {
-                "sudo switchboard server invite --url https://YOUR-DOMAIN"
+                format!("{SUDO} server invite --url https://YOUR-DOMAIN")
             } else {
-                "sudo switchboard server invite"
+                format!("{SUDO} server invite")
             };
             lines.extend(ui::heading(&theme, "Next", width));
             lines.extend(ui::para(
@@ -1628,6 +1732,33 @@ mod tests {
         assert_eq!(std::fs::read(&outside).unwrap(), b"secret\n");
         assert_eq!(mode(&outside), 0o644);
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn hints_name_the_full_path_only_where_sudo_misses_it() {
+        assert!(!probe_needs_full_path(true, "/usr/local/bin/switchboard\n"));
+        assert!(probe_needs_full_path(true, "switchboard-not-found\n"));
+        assert!(probe_needs_full_path(true, "/usr/bin/switchboard\n"));
+        assert!(probe_needs_full_path(
+            false,
+            "sorry, you must have a tty to run sudo"
+        ));
+        assert_eq!(sudo_command(None), "sudo switchboard");
+        assert_eq!(
+            sudo_command(Some(&program_marker(false))),
+            "sudo switchboard"
+        );
+        assert_eq!(
+            sudo_command(Some(&program_marker(true))),
+            "sudo /usr/local/bin/switchboard"
+        );
+        assert_eq!(program_marker(false), "1\n");
+    }
+
+    #[test]
+    fn the_first_invite_can_be_left_out() {
+        assert!(parsed(&["--tls", "private", "--no-invite"]).no_invite);
+        assert!(!parsed(&["--tls", "private"]).no_invite);
     }
 
     #[test]

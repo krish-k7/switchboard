@@ -18,7 +18,7 @@ use serde_json::{Map, Value};
 
 use super::certinfo::{self, Described};
 use super::enroll_local::read_file;
-use super::install::{self, Probe};
+use super::install::{self, Probe, SUDO};
 use super::invites::{self, Local};
 use super::jsonval::{self, get, Val};
 use super::system::{self, Event, Level, Listener, Service, State};
@@ -130,11 +130,11 @@ impl Settings {
     fn install_command(&self) -> String {
         match self.mode {
             Mode::Acme => format!(
-                "sudo switchboard server install --tls acme --domain {}",
+                "{SUDO} server install --tls acme --domain {}",
                 self.hostname.clone().unwrap_or_default()
             ),
-            Mode::Caddy => "sudo switchboard server install --tls caddy".into(),
-            _ => "sudo switchboard server install --tls private".into(),
+            Mode::Caddy => format!("{SUDO} server install --tls caddy"),
+            _ => format!("{SUDO} server install --tls private"),
         }
     }
 
@@ -519,7 +519,16 @@ pub struct Problem {
     pub fix: Option<String>,
 }
 
-const LOGS: &str = "sudo switchboard server logs";
+/// `sudo switchboard server logs`, as this machine runs it.
+struct Logs;
+
+impl std::fmt::Display for Logs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{SUDO} server logs")
+    }
+}
+
+const LOGS: Logs = Logs;
 const START: &str = "sudo systemctl start switchboard-server";
 const RESTART: &str = "sudo systemctl restart switchboard-server";
 
@@ -1011,7 +1020,7 @@ pub fn render(report: &Report, problems: &[Problem], theme: &Theme, columns: usi
         lines.push(String::new());
         lines.extend(ui::para(
             theme,
-            "The journal can't be read as this account, so recent errors aren't shown. To see them, run\n`sudo switchboard server status`",
+            &format!("The journal can't be read as this account, so recent errors aren't shown. To see them, run\n`{SUDO} server status`"),
             Tone::Normal,
             columns,
         ));
@@ -1279,7 +1288,7 @@ pub fn main(argv: &[String]) -> i32 {
                     common.json,
                     ui::prompt::Problem::new("You can't read the server's configuration as this user.")
                         .detail(format!("`switchboard server status` reads {path}, which only root and the server's account can read."))
-                        .fix("run it with sudo: `sudo switchboard server status`"),
+                        .fix(format!("run it with sudo: `{SUDO} server status`")),
                     &format!("cannot read the server config {path}; run this as root or as the server's account"),
                 )
             };
@@ -1304,7 +1313,7 @@ pub fn main(argv: &[String]) -> i32 {
         return unavailable(
             common.json,
             ui::prompt::Problem::new("Only root and the server's account can check the server.")
-                .fix("run it with sudo: `sudo switchboard server status`"),
+                .fix(format!("run it with sudo: `{SUDO} server status`")),
             "run this as root or as the server's service account",
         );
     }

@@ -246,6 +246,24 @@ PY
 client --config "$local" setup --no-start --json | tee "$work/local-setup.json"
 [[ $(json machine < "$work/local-setup.json") == ci-local ]] || fail "the machine enroll-local added cannot reach the server"
 
+step "where sudo's secure_path leaves out /usr/local/bin, the server's hints name the full path"
+dropin=/etc/sudoers.d/zz-switchboard-test
+printf 'Defaults secure_path="/usr/sbin:/usr/bin:/sbin:/bin"\n' > "$work/dropin"
+sudo visudo -cf "$work/dropin" >/dev/null || fail "the test's sudoers line is invalid"
+sudo install -m 440 "$work/dropin" "$dropin"
+if sudo sh -c 'command -v switchboard'; then sudo rm -f "$dropin"; fail "sudo still finds switchboard"; fi
+sudo "$binary" server install --tls private --name localhost --name 127.0.0.1 --json > "$work/secure-path.json" ||
+    { sudo rm -f "$dropin"; fail "install with a narrow secure_path"; }
+sudo grep -qx sudo-needs-full-path /usr/local/lib/switchboard/.server-install || { sudo rm -f "$dropin"; fail "not noted in the marker"; }
+"$binary" server status > "$work/status-user.txt" 2>&1 || true
+grep -q 'sudo /usr/local/bin/switchboard server status' "$work/status-user.txt" ||
+    { cat "$work/status-user.txt"; sudo rm -f "$dropin"; fail "the hint doesn't name the full path"; }
+sudo rm -f "$dropin"
+sudo "$binary" server install --tls private --name localhost --name 127.0.0.1 --json > "$work/secure-path.json"
+! sudo grep -q sudo-needs-full-path /usr/local/lib/switchboard/.server-install || fail "the note outlived the narrow secure_path"
+"$binary" server status > "$work/status-user.txt" 2>&1 || true
+grep -q 'sudo switchboard server status' "$work/status-user.txt" || { cat "$work/status-user.txt"; fail "plain hint not back"; }
+
 step "acme mode: the unit gets the port-443 capability; the server binds 443 unprivileged"
 sudo "$binary" server install --tls acme --domain switchboard.example.com --no-start --json > "$work/acme.json"
 grep -qx 'AmbientCapabilities=CAP_NET_BIND_SERVICE' /etc/systemd/system/switchboard-server.service || fail "no capability"

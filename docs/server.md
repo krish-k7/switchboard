@@ -100,7 +100,13 @@ The installer creates or checks:
 
 It then waits until the server answers and, while no machine has joined, prints an invite for
 the first one (single use, valid for an hour). Each such run replaces the invite an earlier run
-printed.
+printed. `--no-invite` skips it, for scripts and agents that make their own invites with
+`switchboard server invite`.
+
+The command is linked from `/usr/local/bin/switchboard`. On distributions whose sudo replaces
+`PATH` with a `secure_path` without `/usr/local/bin` (`sudo switchboard` then says `command not
+found`), the installer notices, and the server's hints name the full path,
+`sudo /usr/local/bin/switchboard ...`; use that form there.
 
 Running the installer again is safe. It rewrites only what differs and restarts the service only
 when the program, the configuration, the unit, or the private certificate changed. It refuses to

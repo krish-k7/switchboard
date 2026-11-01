@@ -973,10 +973,10 @@ fn finish_server(ui: &mut Ui, server: &ServerDone, summary: &mut Map<String, Val
         }
         None => {
             ui.heading("Next");
-            ui.steps(&[
-                "Make an invite for each machine that joins:\n`sudo switchboard server invite`"
-                    .into(),
-            ]);
+            ui.steps(&[format!(
+                "Make an invite for each machine that joins:\n`{}`",
+                more_invites(false)
+            )]);
         }
     }
 }
@@ -1057,11 +1057,11 @@ pub fn invite_lines(theme: &Theme, text: &InviteText<'_>, columns: usize) -> Vec
 }
 
 /// The command that makes more invites (in the sandbox, its test server's).
-fn more_invites(stub: bool) -> &'static str {
+fn more_invites(stub: bool) -> String {
     if stub {
-        "switchboard server invite --config SANDBOX/server.json"
+        "switchboard server invite --config SANDBOX/server.json".into()
     } else {
-        "sudo switchboard server invite"
+        format!("{} server invite", crate::server::install::SUDO)
     }
 }
 
@@ -1074,6 +1074,7 @@ pub(crate) fn show_invite(
     stub: bool,
 ) {
     ui.blank();
+    let more = more_invites(stub);
     let lines = invite_lines(
         &ui.theme,
         &InviteText {
@@ -1085,7 +1086,7 @@ pub(crate) fn show_invite(
             },
             uses: "single use".into(),
             expires_at,
-            more: Some(more_invites(stub)),
+            more: Some(&more),
             wrap: ui.interactive(),
         },
         ui.columns(),

@@ -438,8 +438,12 @@ empty registry, the configuration, the program at `/usr/local/lib/switchboard/sw
 `/usr/local/bin/switchboard` link, and the unit `switchboard-server.service`. It starts the
 service (restarting it when the program, configuration, unit, or private certificate changed),
 waits up to 15 seconds for it to answer, and prints the first invite (single use, one hour) while
-no machine has joined, replacing the one an earlier run printed. It refuses to replace a unit,
-configuration directory, or program directory it didn't write, and never touches firewalls.
+no machine has joined, replacing the one an earlier run printed (unless given `--no-invite`). It
+refuses to replace a unit, configuration directory, or program directory it didn't write, and
+never touches firewalls. It also asks sudo whether `sudo switchboard` finds the program: some
+distributions' sudo replaces PATH with a `secure_path` that leaves out `/usr/local/bin`. If it
+doesn't, the installer notes that in `/usr/local/lib/switchboard/.server-install`, and every hint
+the server prints names `sudo /usr/local/bin/switchboard`.
 
 The unit runs `switchboard server --config /etc/switchboard/server.json` as `switchboard` with
 `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `PrivateDevices`,

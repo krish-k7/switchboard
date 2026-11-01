@@ -7,6 +7,7 @@
 
 use serde_json::{Map, Value};
 
+use super::install::SUDO;
 use super::system::{self, Event, Level};
 use crate::cli::ui::{self, Mark, Theme, Tone};
 
@@ -241,7 +242,7 @@ pub fn main(argv: &[String]) -> i32 {
     if !system::can_read_journal() {
         return fail(
             ui::prompt::Problem::new("You can't read the system journal as this user.")
-                .fix("run it with sudo: `sudo switchboard server logs`"),
+                .fix(format!("run it with sudo: `{SUDO} server logs`")),
             "cannot read the system journal; run this as root",
         );
     }

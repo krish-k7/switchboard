@@ -32,6 +32,7 @@ use serde_json::{Map, Value};
 use sha2::Digest;
 
 use super::enroll_local::{atomic, open_lock, os_error, read_file, refuse, Failure, Result};
+use super::install::SUDO;
 use super::jsonval::{self, get, JsonStr, Val};
 use crate::fsutil;
 use crate::invite::{self, Invite};
@@ -786,7 +787,7 @@ fn finish(json: bool, outcome: Result<(Map<String, Value>, String)>, command: &s
                     )
                     .detail(format!("`switchboard server {command}` reads {path}."))
                     .fix(format!(
-                        "run it on the server with sudo: `sudo switchboard server {command}`"
+                        "run it on the server with sudo: `{SUDO} server {command}`"
                     )),
                 );
             } else {
@@ -971,6 +972,7 @@ pub fn describe_for(created: &Created, first: bool) -> (Map<String, Value>, Stri
         (None, uses, false) => format!("{uses} machines"),
     };
     let terminal = crate::cli::ui::term::is_tty(1);
+    let more = format!("{SUDO} server invite");
     let lines = crate::cli::init::invite_lines(
         &crate::cli::ui::Theme::for_fd(1),
         &crate::cli::init::InviteText {
@@ -982,7 +984,7 @@ pub fn describe_for(created: &Created, first: bool) -> (Map<String, Value>, Stri
                 format!("{} uses", entry.uses)
             },
             expires_at: Some(entry.expires_at),
-            more: first.then_some("sudo switchboard server invite"),
+            more: first.then_some(more.as_str()),
             wrap: terminal,
         },
         crate::cli::ui::term::columns(),
@@ -1074,7 +1076,7 @@ pub fn invites_main(argv: &[String]) -> i32 {
                 "Open invites",
                 "none",
                 &[],
-                "Make one with\n`sudo switchboard server invite`",
+                &format!("Make one with\n`{SUDO} server invite`"),
             )
         } else {
             let cells: Vec<Vec<String>> = entries
@@ -1156,7 +1158,7 @@ pub fn machines_main(argv: &[String]) -> i32 {
                 "Machines",
                 "none joined yet",
                 &[],
-                "Make an invite with\n`sudo switchboard server invite`",
+                &format!("Make an invite with\n`{SUDO} server invite`"),
             )
         } else {
             let cells: Vec<Vec<String>> = rows

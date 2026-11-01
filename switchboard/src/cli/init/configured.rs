@@ -279,7 +279,10 @@ pub fn run(
                 Action::Invite,
                 Choice::new(
                     "Make an invite for another machine",
-                    "Runs `sudo switchboard server invite` here.",
+                    format!(
+                        "Runs `{} server invite` here.",
+                        crate::server::install::SUDO
+                    ),
                 ),
             ));
         } else if facts.server_unavailable().is_none() && facts.stub.is_none() {
@@ -567,7 +570,8 @@ fn leave(
     ui.blank();
     ui.say(
         &format!(
-            "The server still lists it as {machine}. To remove it there, run this on the server:\n`sudo switchboard server revoke {machine}`"
+            "The server still lists it as {machine}. To remove it there, run this on the server:\n`{} server revoke {machine}`",
+            crate::server::install::SUDO
         ),
         Tone::Normal,
     );

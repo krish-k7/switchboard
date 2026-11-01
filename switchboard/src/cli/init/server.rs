@@ -13,6 +13,7 @@
 //! for trying init without root: a private test server runs as the current
 //! user from DIR on 127.0.0.1, and nothing is installed system-wide.
 
+use crate::server::install::SUDO;
 use std::net::IpAddr;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
@@ -168,12 +169,12 @@ pub fn acme_problem(detail: &str, domain: &str, port: u16) -> Problem {
     Problem::new("Let's Encrypt didn't issue a certificate.")
         .detail(detail.to_string())
         .fix(format!(
-            "see the server's log with `sudo switchboard server logs`, fix the cause, {rerun}."
+            "see the server's log with `{SUDO} server logs`, fix the cause, {rerun}."
         ))
         .steps([
-            "See the server's log with\n`sudo switchboard server logs`",
-            "Fix the cause.",
-            super::RERUN,
+            format!("See the server's log with\n`{SUDO} server logs`"),
+            "Fix the cause.".into(),
+            super::RERUN.into(),
         ])
 }
 
@@ -227,12 +228,12 @@ fn install_problem(message: &str) -> Problem {
         return Problem::new("The server started but didn't answer within 15 seconds.")
             .detail(shown.join(" "))
             .fix(format!(
-                "see why with `sudo switchboard server logs` (often another program already uses the port), fix it, {again}"
+                "see why with `{SUDO} server logs` (often another program already uses the port), fix it, {again}"
             ))
             .steps([
-                "See why with\n`sudo switchboard server logs`\nOften another program already uses the port.",
-                "Fix it.",
-                super::RERUN_RESUMES,
+                format!("See why with\n`{SUDO} server logs`\nOften another program already uses the port."),
+                "Fix it.".into(),
+                super::RERUN_RESUMES.into(),
             ]);
     }
     Problem::new("The server installation stopped.")
@@ -598,10 +599,19 @@ fn privileged_arguments(options: &Options, plan: &Plan, color: bool) -> Vec<Stri
     arguments
 }
 
+/// This program as a person runs it with sudo: by its path, since sudo's
+/// PATH never has `~/.local/bin`.
+fn this_program() -> String {
+    std::env::current_exe()
+        .map(|path| super::super::install::tilde(&path.to_string_lossy()))
+        .unwrap_or_else(|_| "~/.local/bin/switchboard".into())
+}
+
 /// Run the install step as root through sudo, once.
 fn through_sudo(ui: &mut Ui, options: &Options, plan: &Plan) -> Result<ServerDone, Fail> {
     let rerun = format!(
-        "run it as root instead: `sudo switchboard init --server --tls {}{}`",
+        "run it as root instead: `sudo {} init --server --tls {}{}`",
+        this_program(),
         plan.tls.flag(),
         plan.domain
             .as_ref()
@@ -725,7 +735,7 @@ pub fn privileged(
     if stub.is_none() && !system::is_root() {
         return Err(Fail::Problem(
             Problem::new("The install step needs root.")
-                .fix("run `sudo switchboard init --server`."),
+                .fix(format!("run `sudo {} init --server`.", this_program())),
         ));
     }
     let done = install_here(ui, options, &plan, stub.as_deref())?;
@@ -800,10 +810,10 @@ fn install_here(
     if outcome.reissued {
         ui.caution(
             &Problem::new("The server's certificate changed to cover the new names, so machines that joined before can't connect.")
-                .fix("make a new invite for each of them (`sudo switchboard server invite`), then on each one run `switchboard init`, choose to join again, and paste it.")
+                .fix(format!("make a new invite for each of them (`{SUDO} server invite`), then on each one run `switchboard init`, choose to join again, and paste it."))
                 .steps([
-                    "Make a new invite for each of them with\n`sudo switchboard server invite`",
-                    "On each one, run this, choose to join again, and paste the invite:\n`switchboard init`",
+                    format!("Make a new invite for each of them with\n`{SUDO} server invite`"),
+                    "On each one, run this, choose to join again, and paste the invite:\n`switchboard init`".into(),
                 ]),
         );
     }
@@ -873,7 +883,7 @@ fn invite_problem(failure: crate::server::enroll_local::Failure) -> Fail {
     Fail::Problem(
         Problem::new("The server is running, but no invite could be made.")
             .detail(message)
-            .fix("make one with `sudo switchboard server invite`."),
+            .fix(format!("make one with `{SUDO} server invite`.")),
     )
 }
 
@@ -1001,10 +1011,10 @@ fn wait_certificate(
                 if began.elapsed() > Duration::from_secs(150) {
                     return Err(Problem::new(format!("No certificate for {domain} after two and a half minutes.")).detail(
                         "The server keeps asking Let's Encrypt in the background.",
-                    ).fix("watch its log with `sudo switchboard server logs --follow`; once it says certificate_obtained, run `switchboard init` again for the invite.")
+                    ).fix(format!("watch its log with `{SUDO} server logs --follow`; once it says certificate_obtained, run `switchboard init` again for the invite."))
                     .steps([
-                        "Watch its log with\n`sudo switchboard server logs --follow`",
-                        "Once it says certificate_obtained, run this again for the invite:\n`switchboard init`",
+                        format!("Watch its log with\n`{SUDO} server logs --follow`"),
+                        "Once it says certificate_obtained, run this again for the invite:\n`switchboard init`".into(),
                     ]));
                 }
                 progress.set(format!("{running} ({} s)", began.elapsed().as_secs()));

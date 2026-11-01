@@ -17,7 +17,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
 use serde_json::{Map, Value};
 
-use super::install::{self, ACCOUNT, MARKER, UNIT_NAME};
+use super::install::{self, ACCOUNT, MARKER, SUDO, UNIT_NAME};
 use crate::cli::ui::{self, Mark, Theme, Tone};
 
 const USAGE: &str = "Usage: switchboard server uninstall [--purge] [--json]\n";
@@ -630,7 +630,7 @@ pub fn render(outcome: &Outcome, theme: &Theme, columns: usize) -> String {
     if !data.is_empty() || outcome.account_kept {
         lines.extend(ui::para(
             theme,
-            "Installing the server again with the same options uses these, so machines reconnect without joining again. To delete them too, run\n`sudo switchboard server uninstall --purge`",
+            &format!("Installing the server again with the same options uses these, so machines reconnect without joining again. To delete them too, run\n`{SUDO} server uninstall --purge`"),
             Tone::Normal,
             columns,
         ));
@@ -742,7 +742,7 @@ pub fn main(argv: &[String]) -> i32 {
     if unsafe { libc::geteuid() } != 0 {
         return fail(
             ui::prompt::Problem::new("Removing the server needs root.")
-                .fix("run it with sudo: `sudo switchboard server uninstall`"),
+                .fix(format!("run it with sudo: `{SUDO} server uninstall`")),
             "run as root",
         );
     }
@@ -775,11 +775,11 @@ pub fn main(argv: &[String]) -> i32 {
                     "{path} wasn't written by the server installer, so nothing was removed."
                 ))
                 .fix(format!(
-                    "move it aside if it isn't needed, then run `sudo switchboard server uninstall{}` again.",
+                    "move it aside if it isn't needed, then run `{SUDO} server uninstall{}` again.",
                     if purge { " --purge" } else { "" }
                 )),
                 None => ui::prompt::Problem::new(format!("The server couldn't be removed: {message}."))
-                    .fix("fix that, then run `sudo switchboard server uninstall` again; it carries on from where it stopped."),
+                    .fix(format!("fix that, then run `{SUDO} server uninstall` again; it carries on from where it stopped.")),
             };
             fail(problem, &message)
         }

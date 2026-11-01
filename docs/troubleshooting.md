@@ -221,6 +221,15 @@ appears; a healthy server shows `✓ The server is healthy.` above its facts.
 | `The server has logged <n> errors since it started.` | The newest are listed under **Recent errors**; see them in context with `sudo switchboard server logs`. |
 | `You can't read the server's configuration as this user.` | Run it with `sudo`. |
 
+**`sudo: switchboard: command not found` on the server.** The server's command is
+`/usr/local/bin/switchboard`, and some distributions' sudo replaces your `PATH` with a
+`secure_path` that leaves out `/usr/local/bin` (`sudo sudo -V | grep 'override user'` shows it).
+Run the commands by their full path, `sudo /usr/local/bin/switchboard server ...`. The server
+installer checks this when it runs: where sudo doesn't find `switchboard`, every hint the server
+prints names the full path. To make `sudo switchboard` work instead, add `/usr/local/bin` to
+`secure_path` with `sudo visudo`. Hints printed on other machines (for example `init`'s "make an
+invite on the server") can't know the server's sudo and say `sudo switchboard`.
+
 ## Certificate problems
 
 **A private-mode server changed its certificate.** Rerunning the server installer with different
