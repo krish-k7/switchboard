@@ -34,8 +34,9 @@ An invite's secret is 24 random bytes, and the server stores only its SHA-256 ha
 an invite works once and expires after an hour (at most 30 days and 1,000 uses; at most 64 open
 at once). Uses are taken under a lock, so two machines racing for a single-use invite cannot both
 join. An invite made with `--name` can only be used under that name, and only once. Init and
-setup refuse an invite given on the command line (`--invite VALUE`), where other users could see
-it in `ps`; it comes from standard input, `SWITCHBOARD_INVITE`, or a prompt without echo.
+setup take the invite on the command line (`--invite VALUE`), from standard input,
+`SWITCHBOARD_INVITE`, or a prompt without echo; one given on the command line is visible to
+other users of that machine (in `ps`) while the command runs, and stays in the shell's history.
 
 **Revocation.** `sudo switchboard server revoke NAME` disables a machine's key. The server
 rereads the registry on every request, so the key stops working on its next request; a waiting

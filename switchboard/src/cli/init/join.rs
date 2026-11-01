@@ -92,14 +92,18 @@ const INVITE_HINT: &str = "The invite stays hidden; line breaks and spaces are f
 /// The hint when asking again (the first invite was refused, or a new one).
 const NEW_INVITE_HINT: &str = "It stays hidden; line breaks and spaces are fine.\n\nThe server makes one with\n`sudo switchboard server invite`";
 
-/// The invite: from standard input (`--invite` without a terminal),
-/// `SWITCHBOARD_INVITE`, or asked for on the terminal; and whether it was
-/// asked for.
+/// The invite: given with `--invite VALUE`, from standard input
+/// (`--invite` without a terminal), `SWITCHBOARD_INVITE`, or asked for on
+/// the terminal; and whether it was asked for. A given one is cleaned as
+/// pasted text is (line breaks, spaces, and quotes dropped).
 pub fn obtain_invite(
     ui: &mut Ui,
     options: &Options,
     question: &str,
 ) -> Result<(Invite, bool), Fail> {
+    if let Some(InviteArg::Given(text)) = &options.invite {
+        return Ok((read_invite(text).map_err(bad_invite)?, false));
+    }
     if options.invite == Some(InviteArg::Ask) && !term::is_tty(0) {
         let mut text = String::new();
         let _ = std::io::Read::read_to_string(
@@ -133,7 +137,7 @@ pub fn obtain_invite(
             NEW_INVITE_HINT
         },
         check: &check,
-        flag: "--invite (with the invite on standard input) or SWITCHBOARD_INVITE",
+        flag: "--invite INVITE, --invite - (on standard input), or SWITCHBOARD_INVITE",
     })?;
     Ok((read_invite(&raw).map_err(bad_invite)?, true))
 }

@@ -80,11 +80,11 @@ again is safe: it picks up where it stopped, or shows how this machine is set
 up and what you can do next.
 
 Join a server:
-  --invite [-]         join with an invite, made on the server with sudo
-                       switchboard server invite: read from standard input,
-                       or asked for without echo in a terminal;
-                       SWITCHBOARD_INVITE works too. Never on the command
-                       line, where other users can see it
+  --invite [INVITE|-]  join with an invite, made on the server with sudo
+                       switchboard server invite: given here (--invite
+                       sbi1...), read from standard input (--invite -, or
+                       --invite alone without a terminal), or asked for in a
+                       terminal; SWITCHBOARD_INVITE works too
   --name NAME          this machine's name (default: its host name)
   --owner NAME         who it belongs to (default: your user name)
   --plugin             install the Claude Code plugin (/switchboard commands)
@@ -116,16 +116,15 @@ Run the server here (Linux with systemd; sudo is used once):
   -h, --help           show this help
 ";
 
-/// `--invite` (or `--invite -`): the invite comes from standard input,
-/// `SWITCHBOARD_INVITE`, or a prompt, never from the command line.
+/// `--invite VALUE` gives the invite; `--invite` (or `--invite -`) reads it
+/// from standard input, `SWITCHBOARD_INVITE`, or a prompt.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InviteArg {
     /// Read from standard input, or ask.
     Ask,
+    /// Given on the command line, as pasted (cleaned when read).
+    Given(String),
 }
-
-/// Why `--invite VALUE` is refused, and how to pass the invite instead.
-pub const INLINE_INVITE: &str = "--invite doesn't take the invite on the command line, where other users can see it (in ps) and your shell keeps it in its history. Pass it on standard input (printf '%s\\n' \"$INVITE\" | switchboard init --invite), set SWITCHBOARD_INVITE, or run switchboard init --invite in a terminal and paste it";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tls {
@@ -233,10 +232,10 @@ pub fn parse(argv: &[String], default_config: &str) -> Result<Option<Options>, S
                         _ => None,
                     },
                 };
-                if given.as_deref().is_some_and(|text| text != "-") {
-                    return Err(INLINE_INVITE.into());
-                }
-                o.invite = Some(InviteArg::Ask);
+                o.invite = Some(match given {
+                    Some(text) if text != "-" => InviteArg::Given(text),
+                    _ => InviteArg::Ask,
+                });
             }
             "--join" => {
                 flag(&inline)?;
@@ -681,7 +680,7 @@ pub fn run(options: &Options, ui: &mut Ui, summary: &mut Map<String, Value>) -> 
                 return Err(Fail::Problem(
                     Problem::new("Nothing to set up: no invite and no server options.")
                         .detail("There is no terminal to ask what this machine should do.")
-                        .fix("pass `--invite -` (with the invite on standard input) to join a server, or `--server --tls private` to run the server here."),
+                        .fix("pass `--invite INVITE` (or `--invite -` with it on standard input) to join a server, or `--server --tls private` to run the server here."),
                 ))
             }
             None => match facts.only_role() {
@@ -1120,9 +1119,19 @@ mod tests {
         assert_eq!(ok(&["--invite"]).invite, Some(InviteArg::Ask));
         assert_eq!(ok(&["--invite", "-"]).invite, Some(InviteArg::Ask));
         assert_eq!(ok(&["--invite=-"]).invite, Some(InviteArg::Ask));
-        // Never the invite itself: other users would see it in ps.
-        assert_eq!(err(&["--invite", "sbi1.x", "--yes"]), INLINE_INVITE);
-        assert_eq!(err(&["--invite=sbi1.y"]), INLINE_INVITE);
+        // The invite itself, after a space or an equals sign, as pasted.
+        assert_eq!(
+            ok(&["--invite", "sbi1.x", "--yes"]).invite,
+            Some(InviteArg::Given("sbi1.x".into()))
+        );
+        assert_eq!(
+            ok(&["--invite=sbi1.y"]).invite,
+            Some(InviteArg::Given("sbi1.y".into()))
+        );
+        assert_eq!(
+            ok(&["--invite", " sbi1.a\nb "]).invite,
+            Some(InviteArg::Given(" sbi1.a\nb ".into()))
+        );
         let o = ok(&["--invite", "--name", "box"]);
         assert_eq!(
             (o.invite, o.name.as_deref()),

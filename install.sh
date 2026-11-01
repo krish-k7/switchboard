@@ -3,7 +3,7 @@
 # everything goes under your home directory.
 #
 #   curl -fsSL https://raw.githubusercontent.com/krish-k7/switchboard/main/install.sh | sh
-#   curl -fsSL https://raw.githubusercontent.com/krish-k7/switchboard/main/install.sh | sh -s -- --invite
+#   curl -fsSL https://raw.githubusercontent.com/krish-k7/switchboard/main/install.sh | sh -s -- --invite 'sbi1...'
 #
 # It downloads the release binary for this OS and architecture with the
 # release's SHA256SUMS, checks the checksum, and runs `switchboard install`,
@@ -16,10 +16,9 @@
 # Then it starts `switchboard init` on the terminal (read from /dev/tty, so
 # `curl | sh` works), which joins this machine to a server with an invite,
 # sets up the server here, or both. Options after `sh -s --` go to init (see
-# `switchboard init --help`); `--invite` alone asks for the invite without
-# echo. Without a terminal, init runs only when given options or
-# SWITCHBOARD_INVITE, and then asks nothing. The invite never appears on a
-# command line, where other users could see it in ps.
+# `switchboard init --help`): `--invite INVITE` joins with that invite, and
+# `--invite` alone asks for it. Without a terminal, init runs only when given
+# options or SWITCHBOARD_INVITE, and then asks nothing.
 #
 # On a machine that is already set up, a run without options or an invite
 # only upgrades: it restarts the bridge if it was running, and leaves it
@@ -305,28 +304,23 @@ main() {
 
     if [ -n "$asks" ] && [ -z "$invite" ] && ! has_terminal; then
         fail "The --invite option needs a terminal to ask for the invite on." \
-            "set SWITCHBOARD_INVITE instead, and run this again."
+            "put the invite after it (--invite sbi1...), or set SWITCHBOARD_INVITE, and run this again."
     fi
     # init's options, checked here so a typo fails before the download.
     unknown="leave it out, or use one of switchboard init's options (switchboard init --help lists them)."
     value=
-    inline_invite() {
-        fail "The --invite option doesn't take the invite on the command line, where other users can see it." \
-            "set SWITCHBOARD_INVITE instead, or use --invite alone and paste the invite when asked."
-    }
     for argument; do
         if [ -n "$value" ]; then
             value=
             case $argument in
                 -*) [ "$previous_option" = --invite ] ||
                         fail "$previous_option needs a value." "put the value after it, or leave it out." ;;
-                *) [ "$previous_option" != --invite ] || inline_invite
-                   continue ;;
+                *) continue ;;
             esac
         fi
         case ${argument%%=*} in
             --invite) previous_option=--invite
-                case $argument in --invite=-) ;; *=*) inline_invite ;; *) value=1 ;; esac ;;
+                case $argument in *=*) ;; *) value=1 ;; esac ;;
             --name | --machine | --owner | --tls | --domain | --email | --server-name | --port | --config)
                 previous_option=$argument; case $argument in *=*) ;; *) value=1 ;; esac ;;
             --join | --plugin | --no-plugin | --no-start | --replace | --server | --yes | -y | --json) ;;

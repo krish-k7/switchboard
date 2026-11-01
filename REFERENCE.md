@@ -65,7 +65,7 @@ Joining:
 
 | Option | Meaning |
 | --- | --- |
-| `--invite [-]` | Join with an invite, read from standard input, or asked for without echo on a terminal. `SWITCHBOARD_INVITE` works too. The invite itself on the command line (`--invite sbi1...`) is refused: other users could see it in `ps` |
+| `--invite [INVITE\|-]` | Join with an invite: given here (`--invite sbi1...` or `--invite=sbi1...`), read from standard input (`--invite -`, or `--invite` alone without a terminal), or asked for on a terminal. `SWITCHBOARD_INVITE` works too. Line breaks, spaces, and quotes around or inside a pasted invite are dropped |
 | `--name NAME` | This machine's name (default: the host name, unless the invite fixes one). `--machine` is the same |
 | `--owner NAME` | Who the machine belongs to (default: your user name) |
 | `--plugin` / `--no-plugin` | Install the Claude Code plugin, or don't. Without a terminal the default is not to |
@@ -315,7 +315,7 @@ for one recovery case:
 
 | Option | Meaning |
 | --- | --- |
-| `--invite -` | Read the invite from standard input. `SWITCHBOARD_INVITE` works too. The invite itself on the command line is refused |
+| `--invite INVITE` | The invite; `--invite -` reads it from standard input, and `SWITCHBOARD_INVITE` works too |
 | `--machine NAME`, `--owner NAME` | As for `init` |
 | `--server-url URL` | Must match the invite's address (`--hub-url` is an older name) |
 | `--server-pin SHA256` | The server certificate's fingerprint, when the invite doesn't carry it |

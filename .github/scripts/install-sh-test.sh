@@ -255,7 +255,7 @@ if ! (exec < /dev/tty) 2>/dev/null; then
     if env -i HOME="$work/home" PATH="$work/bin:/usr/bin:/bin" sh -s -- --invite < "$root/install.sh" 2>"$work/err"; then
         fail "--invite without a terminal succeeded"
     fi
-    grep -q 'set SWITCHBOARD_INVITE instead' "$work/err" || { cat "$work/err"; fail "wrong message"; }
+    grep -q 'or set SWITCHBOARD_INVITE' "$work/err" || { cat "$work/err"; fail "wrong message"; }
 fi
 if env -i HOME="$work/home" PATH="$work/bin:/usr/bin:/bin" sh -s -- --bogus < "$root/install.sh" 2>"$work/err"; then
     fail "an unknown option was accepted"
@@ -265,18 +265,26 @@ if env -i HOME="$work/home" PATH="$work/bin:/usr/bin:/bin" sh -s -- --server --t
     fail "an option without its value was accepted"
 fi
 grep -q -- '--tls needs a value' "$work/err" || { cat "$work/err"; fail "wrong message"; }
-step "--invite never takes the invite on the command line"
+step "--invite takes the invite on the command line too, as pasted"
+# Wrapped and indented, as a chat app hands it over; init cleans it.
+pasted="  ${token:0:30}
+${token:30}  "
 for shell in "${shells[@]}"; do
-    for form in "--invite sbi1.secret" "--invite=sbi1.secret"; do
-        # shellcheck disable=SC2086 # split on purpose: two arguments or one
-        if env -i HOME="$work/home" PATH="$work/bin:/usr/bin:/bin" "$shell" -s -- $form --no-plugin < "$root/install.sh" > "$work/out" 2>"$work/err"; then
-            fail "$shell: $form was accepted"
+    for form in space equals pasted; do
+        rm -rf "$work/home" && mkdir "$work/home"
+        case $form in
+            space) set -- --invite "$token" ;;
+            equals) set -- "--invite=$token" ;;
+            pasted) set -- --invite "$pasted" ;;
+        esac
+        if run "$shell" -- "$@" --no-plugin --name test-box > "$work/out" 2> "$work/err"; then
+            fail "$shell: init succeeded against an unreachable server ($form)"
         fi
-        grep -q "doesn't take the invite on the command line" "$work/err" || { cat "$work/err"; fail "$shell: wrong message for $form"; }
-        grep -q 'set SWITCHBOARD_INVITE instead' "$work/err" || { cat "$work/err"; fail "$shell: no fix for $form"; }
-        if grep -q 'sbi1.secret' "$work/out" "$work/err"; then fail "$shell: $form was printed"; fi
+        grep -q "Can't reach the server at 127.0.0.1:1" "$work/err" || { cat "$work/out" "$work/err"; fail "$shell: init did not use the invite ($form)"; }
+        if grep -q "$token" "$work/out" "$work/err"; then fail "$shell: the invite was printed ($form)"; fi
     done
 done
+set --
 
 step "options without a terminal go to init, which names a missing answer"
 rm -rf "$work/home" && mkdir "$work/home"

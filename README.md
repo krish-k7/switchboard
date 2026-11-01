@@ -52,7 +52,9 @@ machine you add. [INSTALL.md](INSTALL.md) has the steps.
    network or a public domain. The wizard installs the server with `sudo` and prints the first
    invite. [docs/server.md](docs/server.md) explains the choices.
 2. **Add a machine.** On each other machine, run the install command, choose **Join a server** if
-   it asks, and paste the invite. An invite works for one machine and is valid for one hour.
+   it asks, and paste the invite (or give it to the install command up front:
+   `... | sh -s -- --invite 'sbi1...'`). An invite works for one machine and is valid for one
+   hour.
    For each machine after the first, make a new one on the server:
 
    ```sh

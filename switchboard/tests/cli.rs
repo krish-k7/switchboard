@@ -1138,18 +1138,9 @@ fn setup_refuses_a_missing_damaged_or_contradicted_invite_before_making_a_key() 
     };
     assert!(setup(&[], &[])
         .starts_with("setup needs an invite: on the server run switchboard server invite"));
-    // Never the invite itself on the command line: other users see it in ps.
-    let inline = setup(&["--invite", "sbi1.secret"], &[]);
-    assert!(
-        inline.starts_with("--invite doesn't take the invite on the command line"),
-        "{inline}"
-    );
-    assert!(
-        inline.contains("| switchboard setup --invite -"),
-        "{inline}"
-    );
-    assert!(inline.contains("SWITCHBOARD_INVITE"), "{inline}");
-    assert!(!inline.contains("sbi1.secret"), "{inline}");
+    // An invite on the command line is checked like any other.
+    assert!(setup(&["--invite", "sbi1.secret"], &[]).starts_with("the invite is damaged"));
+    assert!(setup(&["--invite", "nonsense"], &[]).starts_with("that is not a Switchboard invite"));
     assert!(setup(&[], &[("SWITCHBOARD_INVITE", "nonsense")])
         .starts_with("that is not a Switchboard invite"));
     assert!(setup(&[], &[("SWITCHBOARD_INVITE", "sbi1.AAAA")]).starts_with("the invite is damaged"));
@@ -1178,6 +1169,22 @@ fn setup_refuses_a_missing_damaged_or_contradicted_invite_before_making_a_key() 
         &[("SWITCHBOARD_INVITE", &fixed)]
     )
     .starts_with("--server-url https://127.0.0.1:2 is not the server the invite is for"));
+    // The invite given on the command line, as pasted (wrapped, indented,
+    // quoted) or after an equals sign, is the one setup uses.
+    let pasted = format!("  `{}\n{}`  ", &fixed[..30], &fixed[30..]);
+    for invite in [fixed.as_str(), pasted.as_str()] {
+        assert_eq!(
+            setup(&["--invite", invite, "--machine", "desktop"], &[]),
+            "the invite is for the machine name laptop, not desktop"
+        );
+    }
+    assert_eq!(
+        setup(
+            &[&format!("--invite={pasted}"), "--machine", "desktop"],
+            &[]
+        ),
+        "the invite is for the machine name laptop, not desktop"
+    );
     assert!(!env.temp.0.join("cfg").exists());
     // Only init and setup take --invite.
     let output = env.run(&["cli", "status", "--invite", &fixed, "--json"]);

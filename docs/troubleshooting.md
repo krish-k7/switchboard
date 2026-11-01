@@ -83,8 +83,7 @@ numbered steps.
 | `Switchboard does not run on ...` or `Switchboard has no build for ... processors.` | Switchboard runs on macOS and Linux, on x86_64 or arm64. |
 | `Downloading Switchboard needs curl or wget, and this machine has neither.` | Install `curl` and run the command again. |
 | `The download of ... does not match the release's checksum, so nothing was installed.` | Run it again. If it fails the same way, the release itself is damaged. |
-| `The --invite option needs a terminal to ask for the invite on.` | You ran the installer with `--invite` but no terminal (for example from a script). Set `SWITCHBOARD_INVITE` instead. |
-| `The --invite option doesn't take the invite on the command line, where other users can see it.` | You passed the invite itself after `--invite`. Set `SWITCHBOARD_INVITE` instead, or use `--invite` alone and paste the invite when asked. |
+| `The --invite option needs a terminal to ask for the invite on.` | You ran the installer with `--invite` alone but no terminal (for example from a script). Put the invite after it (`--invite 'sbi1...'`), or set `SWITCHBOARD_INVITE`. |
 | `Could not reach <host> (...)` | Check the machine's internet connection. |
 | `unmanaged command: ~/.local/bin/switchboard (...)` | Something Switchboard didn't write is at the command's path (a file that isn't a Switchboard program, or a link to anything but the old `~/bin/switchboard`). Move it aside if you don't need it, then install again. |
 | `unsafe install directory: ~/.local/bin` | The directory must be yours, a real directory (not a link), and not writable by others (`chmod 755 ~/.local/bin`). |
@@ -127,9 +126,8 @@ These come from `switchboard init` when it joins with an invite.
 | `This invite has expired.` | Invites last an hour by default. Make a new one (`--expires 1d` makes one that lasts a day). |
 | `The server didn't accept this invite.` | It was revoked, or the server doesn't know it. Make a new one. |
 | `The invite is for the machine name build-box, not laptop.` | The invite was made with `--name`. Leave out `--name`, or ask for an invite without a fixed name. |
-| `--invite doesn't take the invite on the command line, ...` | `switchboard init --invite sbi1...` (or `setup --invite sbi1...`) is refused, because other users could see the invite in `ps`. Pipe it in (`printf '%s\n' "$INVITE" \| switchboard init --invite`), set `SWITCHBOARD_INVITE`, or run `switchboard init --invite` in a terminal and paste it. |
 | `No invite on standard input.` | `--invite -` (or `--invite` alone) without a terminal reads the invite from standard input, and nothing came. Pipe it in, or set `SWITCHBOARD_INVITE`. |
-| `Nothing to set up: no invite and no server options.` | Init has no terminal to ask on. Pass `--invite -` with the invite on standard input, or `--server --tls private` to run the server here. |
+| `Nothing to set up: no invite and no server options.` | Init has no terminal to ask on. Pass `--invite 'sbi1...'` (or `--invite -` with the invite on standard input), or `--server --tls private` to run the server here. |
 
 **Reaching the server.**
 

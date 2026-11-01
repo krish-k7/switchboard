@@ -1010,17 +1010,12 @@ pub fn setup(
     Ok(result)
 }
 
-/// Why `setup --invite VALUE` is refused, and how to pass the invite.
-pub const INLINE_INVITE: &str = "--invite doesn't take the invite on the command line, where other users can see it (in ps) and your shell keeps it in its history. Pass - and give it on standard input (printf '%s\\n' \"$INVITE\" | switchboard setup --invite -), or set SWITCHBOARD_INVITE";
-
 /// The variable `setup` reads the invite from when `--invite` is not given.
 pub const INVITE_VARIABLE: &str = "SWITCHBOARD_INVITE";
 
-/// The invite, kept out of the command line where other users see it in
-/// `ps` and the shell keeps it in its history: `--invite -` reads it from
+/// The invite: `--invite VALUE` gives it, `--invite -` reads it from
 /// standard input (without echo on a terminal), and without `--invite` it
-/// comes from `SWITCHBOARD_INVITE`. `--invite VALUE` is refused, as init
-/// refuses it.
+/// comes from `SWITCHBOARD_INVITE`. Each is cleaned as pasted text is.
 fn setup_invite(given: Option<&str>) -> Result<Option<Invite>> {
     let text = match given {
         Some("-") => {
@@ -1032,7 +1027,7 @@ fn setup_invite(given: Option<&str>) -> Result<Option<Invite>> {
             }
             text
         }
-        Some(_) => return Err(machine_error(INLINE_INVITE)),
+        Some(given) => given.to_string(),
         None => match std::env::var(INVITE_VARIABLE) {
             Ok(value) if !crate::text::strip(&value).is_empty() => value,
             _ => return Ok(None),

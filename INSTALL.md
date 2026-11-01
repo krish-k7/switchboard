@@ -181,14 +181,14 @@ Then join with an invite, in one of two ways:
   user.
 
 - **With an invite the user gives you** (made on the server with
-  `sudo switchboard server invite`), pass it to `init` on standard input. `init` takes the invite
-  only that way, from `SWITCHBOARD_INVITE`, or typed at its prompt; it refuses `--invite VALUE`.
-  Put the invite in the shell variable `INVITE` (keep it whole: it starts with `sbi1.`; line
-  breaks and spaces a chat added are fine), then:
+  `sudo switchboard server invite`), pass it after `--invite`, whole (it starts with `sbi1.`;
+  line breaks and spaces a chat added are fine inside the quotes):
 
   ```sh
-  printf '%s\n' "$INVITE" | ~/.local/bin/switchboard init --invite - --no-plugin
+  ~/.local/bin/switchboard init --invite 'sbi1....' --no-plugin
   ```
+
+  `init` also reads it from standard input (`--invite -`) or `SWITCHBOARD_INVITE`.
 
   The user can also run `~/.local/bin/switchboard init` in their own terminal and paste it when
   asked.

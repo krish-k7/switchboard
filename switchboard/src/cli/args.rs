@@ -207,7 +207,7 @@ Options:
                      (SWITCHBOARD_CONFIG) is kept
 ";
 
-const SETUP_HELP: &str = "Usage: switchboard setup [--invite -] [options]
+const SETUP_HELP: &str = "Usage: switchboard setup [--invite INVITE|-] [options]
 
 The older way to join a server without a terminal; switchboard init does the
 same and more. setup makes this machine's key, joins with the invite, and
@@ -215,9 +215,9 @@ starts the bridge. On a machine that is set up, it confirms the server still
 knows this machine, and can trust a server's new certificate.
 
 Options:
-  --invite -         read the invite (from sudo switchboard server invite) from
-                     standard input, or set SWITCHBOARD_INVITE; never on the
-                     command line, where it would show in ps and your history
+  --invite INVITE    the invite (from sudo switchboard server invite); --invite
+                     - reads it from standard input, and SWITCHBOARD_INVITE
+                     works too
   --machine NAME     this machine's name (default: its host name)
   --owner NAME       who it belongs to (default: your user name)
   --server-url URL   the server's address; it must match the invite's

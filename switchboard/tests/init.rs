@@ -283,22 +283,20 @@ fn without_a_terminal_a_missing_answer_names_its_option() {
         "{}",
         text(&output)
     );
-    // The invite itself is never taken on the command line, where other
-    // users see it in ps; the refusal says how to pass it.
+    // An invite on the command line is checked like a pasted one, before
+    // anything is made.
     for args in [
         &["--invite", "sbi1.secret"][..],
         &["--invite=sbi1.secret"][..],
+        &["--invite", "not-an-invite"][..],
     ] {
         let output = machine.run(args, &[], "");
-        assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+        assert_ne!(output.status.code(), Some(0), "{}", text(&output));
         let said = text(&output);
         assert!(
-            said.contains("--invite doesn't take the invite on the command line"),
+            said.contains("damaged") || said.contains("isn't a Switchboard invite"),
             "{said}"
         );
-        assert!(said.contains("| switchboard init --invite"), "{said}");
-        assert!(said.contains("SWITCHBOARD_INVITE"), "{said}");
-        assert!(!said.contains("sbi1.secret"), "{said}");
         machine.assert_clean();
     }
     let output = machine.run(&["--bogus"], &[], "");
@@ -374,6 +372,40 @@ fn joins_from_standard_input_and_reruns_show_the_state() {
     assert!(machine
         .plugin_calls()
         .contains("plugin install switchboard --marketplace krish-k7/switchboard --json"));
+}
+
+/// The invite can be given on the command line, after a space or an equals
+/// sign, and is cleaned as a pasted one is (line breaks, spaces, quotes).
+#[test]
+fn joins_with_the_invite_on_the_command_line() {
+    let temp = Temp::new();
+    let server = Server::start(&temp.0, "server");
+    for (name, form) in [("first", "space"), ("second", "equals")] {
+        let machine = Machine::new(&temp, name);
+        let invite = server.invite(&[]);
+        let pasted = format!("  '{}\n{}'  ", &invite[..30], &invite[30..]);
+        let joined = format!("--invite={pasted}");
+        let args: Vec<&str> = if form == "space" {
+            vec![
+                "--invite",
+                &pasted,
+                "--name",
+                name,
+                "--no-start",
+                "--no-plugin",
+            ]
+        } else {
+            vec![&joined, "--name", name, "--no-start", "--no-plugin"]
+        };
+        let (code, value) = machine.json(&args, &[], "");
+        assert_eq!(code, 0, "{value}");
+        assert_eq!(value["machine"], name, "{value}");
+        assert!(machine.config().exists());
+        assert!(
+            !value.to_string().contains(&invite),
+            "the invite was printed"
+        );
+    }
 }
 
 /// The PATH offer is about ~/.local/bin, where the command is, and only
