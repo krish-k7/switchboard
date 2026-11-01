@@ -10,15 +10,8 @@ can follow them too; [README.md](README.md) is the shorter guide.
 - Do only what these steps say. Don't join chats, change firewalls, copy keys between machines,
   or change Claude Code settings. Leave the choice of chats to the user.
 - Never choose a machine, a mode, or a domain yourself. Ask, and confirm what you found.
-- An invite is a password until it is used: anyone holding it can join one machine before it
-  expires (one hour by default). Never ask the user to paste one into the chat, and never print
-  it, write it to a file, or put it on a command line (other users can see command lines in `ps`,
-  shells keep them in history, and your own commands are command lines too). An invite reaches
-  `switchboard init` in one of two ways: through a pipe from the server, as in step 5, or typed by
-  the user into `switchboard init` in their own terminal, which asks for it without echo.
-  Switchboard refuses an invite given as `--invite VALUE`.
-- If the user pastes an invite into the chat anyway, don't put it in a command. Have them run
-  `~/.local/bin/switchboard init` in their own terminal and paste it there.
+- An invite lets one machine join until it is used or expires (one hour by default). If the user
+  gives you one, use it (step 5 says how to pass it).
 - When a step fails, report the error exactly as printed and the step that failed.
 
 ## 1. Check this machine
@@ -187,13 +180,18 @@ Then join with an invite, in one of two ways:
   server installed some other way may keep its program or configuration elsewhere, so ask the
   user.
 
-- **Otherwise**, the user gets an invite (made on the server with
-  `sudo switchboard server invite`) and runs this in their own terminal, which asks for it without
-  echo:
+- **With an invite the user gives you** (made on the server with
+  `sudo switchboard server invite`), pass it to `init` on standard input. `init` takes the invite
+  only that way, from `SWITCHBOARD_INVITE`, or typed at its prompt; it refuses `--invite VALUE`.
+  Put the invite in the shell variable `INVITE` (keep it whole: it starts with `sbi1.`; line
+  breaks and spaces a chat added are fine), then:
 
   ```sh
-  ~/.local/bin/switchboard init
+  printf '%s\n' "$INVITE" | ~/.local/bin/switchboard init --invite - --no-plugin
   ```
+
+  The user can also run `~/.local/bin/switchboard init` in their own terminal and paste it when
+  asked.
 
 `init` checks the server's certificate against the invite (or, for a public domain, the system's
 trusted authorities) and stops before making anything if the check fails. It then makes this
@@ -220,8 +218,7 @@ Options for `init`:
 - `--no-start` joins without installing or starting the bridge.
 
 Without a terminal, init asks nothing; a missing answer stops it with exit status 2 and names the
-option that gives it. `init` also reads `SWITCHBOARD_INVITE`, but only use it when the invite is
-already in the environment; setting it in a command puts the invite on that command line.
+option that gives it. `init` also reads the invite from `SWITCHBOARD_INVITE`.
 
 Keep `~/.config/switchboard/` at mode 0700 and its files at 0600. Never print the private key or
 commit these files. Keys don't expire, so nothing needs renewing.

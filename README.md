@@ -37,16 +37,13 @@ Paste this into Claude Code on your machine:
 Set up Switchboard (https://github.com/krish-k7/switchboard) on this machine by following
 https://raw.githubusercontent.com/krish-k7/switchboard/main/INSTALL.md. If I don't have a
 Switchboard server yet, set one up on a Linux machine I choose. Ask me before every choice
-INSTALL.md leaves to me. Follow its rules for invites: never ask me to paste one into this chat,
-never put one on a command line, and if I paste one anyway, don't use it. When you're done, tell
-me what you changed on each machine and how to check that it works.
+INSTALL.md leaves to me.
 ```
 
 With no server yet, the agent asks which machine should run it and how to reach it over SSH,
-installs the server there, makes an invite, and joins this machine with it. The invite travels
-from the server to this machine through SSH, never through the chat. With a server already
-running, the agent makes an invite over SSH, or has you enter one in your own terminal. Run the
-same prompt on each machine you add. [INSTALL.md](INSTALL.md) has the steps.
+installs the server there, makes an invite, and joins this machine with it. With a server already
+running, the agent makes an invite over SSH, or uses one you give it. Run the same prompt on each
+machine you add. [INSTALL.md](INSTALL.md) has the steps.
 
 ## Quick start
 

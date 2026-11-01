@@ -94,10 +94,10 @@ not mean the other Claude read it or acted on it.
 **A stolen key works until you revoke it.** Keys don't expire. If a machine is lost, revoke it on
 the server right away.
 
-**Invites must travel safely.** An invite is both a password (anyone holding it can join one
-machine) and, in private mode, the fingerprint that tells the new machine which server to trust.
-Pass it over a channel you trust, and don't paste it into a chat with an agent if you can avoid
-it.
+**What an invite grants.** An invite lets one machine join until it is used or expires (one hour
+by default). In private mode it also carries the fingerprint that tells the new machine which
+server to trust. An unused invite can be cancelled on the server (`sudo switchboard server
+invite revoke ID`).
 
 **What leaves your machine.** For each joined chat, the server and every joined machine see its
 name, its activity (idle, busy, waiting, or shell), and labels for its project (the working
