@@ -260,7 +260,6 @@ impl Drop for NetWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc::channel;
     use std::time::Duration;
 
     #[test]
@@ -279,7 +278,7 @@ mod tests {
             fn notify_post(name: *const libc::c_char) -> u32;
         }
         let name = format!("dev.switchboard.test.{}", crate::identity::uuid4_hex());
-        let (sent, seen) = channel();
+        let (sent, seen) = std::sync::mpsc::channel();
         let mut watcher = NetWatcher::named(
             &name,
             Arc::new(move || {
