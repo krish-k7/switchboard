@@ -1110,10 +1110,19 @@ pub fn main(argv: &[String]) -> i32 {
         text("command")
     )];
     let started = result.get("started") == Some(&Value::Bool(true));
+    // An install over a running bridge leaves it running; say so instead of
+    // suggesting it be started.
+    let running = !started && !down && super::service::running();
     lines.push(format!(
         "Bridge service: {} ({})",
         text(service_key),
-        if started { "started" } else { "not started" }
+        if started {
+            "started"
+        } else if running {
+            "running"
+        } else {
+            "not started"
+        }
     ));
     if result.contains_key("migrated_from") {
         lines.push(format!(
@@ -1127,7 +1136,7 @@ pub fn main(argv: &[String]) -> i32 {
             "This machine is down, so the bridge wasn't started. To bring it back online: switchboard up"
                 .into(),
         );
-    } else if !started {
+    } else if !started && !running {
         let config = result.get("config").and_then(Value::as_str);
         if crate::fsutil::exists(config.unwrap_or_default()) {
             lines.push("Start the bridge with: switchboard up".into());

@@ -195,7 +195,7 @@ test('detailed roster keeps full IDs, metadata, and precise local markers', () =
 
 test('session flags route explicit argv; search stays local and matches joined names', async ($, on) => {
   const state = setup(on)
-  const local = await command($, 'sessions --local solver')
+  const local = await command($, 'sessions --local release')
   expect(local.text).toContain('Local work')
   expect(local.text).not.toContain('Remote research')
   const remote = await command($, 'sessions --remote "Remote project"')
@@ -500,14 +500,14 @@ test('chats lists chats; sessions is an accepted older name for it', async ($, o
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   expect(state.registrations[0].description).toBe('Join, leave, and list chats across your machines')
   expect(state.registrations[0].argumentHint).toBe('[status|chats|join [name]|leave|ping <chat>|up|down|doctor|help]')
-  for (const args of ['', '--local solver', '--remote --details research', '-- --branch']) {
+  for (const args of ['', '--local release', '--remote --details research', '-- --branch']) {
     expect(parseArgs('chats ' + args)).toEqual(parseArgs('sessions ' + args))
   }
-  const chats = await command($, 'chats --local solver')
-  const sessions = await command($, 'sessions --local solver')
+  const chats = await command($, 'chats --local release')
+  const sessions = await command($, 'sessions --local release')
   expect(chats.text).toBe(sessions.text)
-  expect(chats.text).toMatch(/^Chats on this machine matching “solver”\n/)
-  expect(chats.text).toContain('Full IDs and details:  /switchboard chats --local --details -- solver')
+  expect(chats.text).toMatch(/^Chats on this machine matching “release”\n/)
+  expect(chats.text).toContain('Full IDs and details:  /switchboard chats --local --details -- release')
   expect(state.calls).toEqual([
     ['/home/test/.local/bin/switchboard', 'sessions', '--json', '--local'],
     ['/home/test/.local/bin/switchboard', 'sessions', '--json', '--local'],

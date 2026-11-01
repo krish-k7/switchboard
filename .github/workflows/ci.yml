@@ -53,6 +53,26 @@ jobs:
         # Claude Code refreshes its cached plugin only when the version changes.
         run: .github/scripts/check-versions.sh
 
+  plugin:
+    name: Claude Code plugin
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install Claude Code
+        # Pinned so a Claude Code release can't change the test engine under us.
+        run: npm install -g @anthropic-ai/claude-code@2.1.316
+      - name: Validate and test the plugin
+        working-directory: claude-plugin
+        env:
+          HOME: ${{ runner.temp }}/plugin-home
+        run: |
+          mkdir -p "$HOME"
+          claude plugin validate --strict .
+          claude plugin test
+
   test:
     name: ${{ matrix.os }}
     strategy:
