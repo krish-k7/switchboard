@@ -178,6 +178,14 @@ impl Fixture {
         self.bridge.drain_completions().unwrap();
     }
 
+    /// Register again once the reconnect backoff has passed on the clock.
+    fn retry(&mut self) {
+        let mut clock = self.clock.lock().unwrap();
+        *clock = clock.max(self.bridge.reconnect_at);
+        drop(clock);
+        self.register();
+    }
+
     fn calls(&self) -> Vec<(String, Value)> {
         self.calls.lock().unwrap().clone()
     }
@@ -675,7 +683,7 @@ fn runtime_records_the_servers_refusal_of_this_machine() {
     assert_eq!(runtime["server_refused"], json!("not_enrolled"));
     // A failure that says nothing about this machine replaces it.
     f.hub.lock().unwrap().fail = Some(HubError::Os("lost".into()));
-    f.register();
+    f.retry();
     assert_eq!(read(&path).get("server_refused"), None);
     // The poller's refusal is recorded the same way.
     let generation = f.bridge.generation;
@@ -684,7 +692,7 @@ fn runtime_records_the_servers_refusal_of_this_machine() {
         .unwrap();
     assert_eq!(read(&path)["server_refused"], json!("not_enrolled"));
     f.hub.lock().unwrap().fail = None;
-    f.register();
+    f.retry();
     let runtime = read(&path);
     assert_eq!(runtime["connected"], json!(true));
     assert_eq!(runtime.get("server_refused"), None);
@@ -812,7 +820,7 @@ fn legacy_periodic_refresh_and_modern_recovery() {
     f.bridge.handle(Event::Offline(generation, None)).unwrap();
     let registration = uuid4();
     f.hub.lock().unwrap().registration = Some(registration.clone());
-    f.register();
+    f.retry();
     assert_eq!(f.calls().len(), 4);
     assert_eq!(f.bridge.registration, Some(registration));
 }
@@ -852,7 +860,7 @@ fn failed_registration_does_not_commit_advertised_change() {
     assert!(!f.bridge.online);
     f.hub.lock().unwrap().fail = None;
     assert!(f.bridge.advertised.is_none());
-    f.register();
+    f.retry();
     assert_eq!(
         f.bridge.advertised.as_ref().unwrap()[0]["name"],
         json!("changed")
@@ -1655,4 +1663,190 @@ fn a_helper_write_failure_settles_its_messages() {
         ))
         .unwrap();
     assert_eq!(f.calls().len(), before);
+}
+
+/// Offline, the server is tried with exponential backoff (not every two
+/// seconds), while local discovery still runs at least every 30 seconds; a
+/// network change retries within a second, and an answered poll resets the
+/// backoff. Ten simulated minutes, on the bridge's own scheduling.
+#[test]
+fn offline_retries_back_off_and_a_network_change_retries_soon() {
+    let mut f = Fixture::new();
+    let record = f.record.clone();
+    f.discover_returns(&[&record]);
+    f.hub.lock().unwrap().fail = Some(HubError::Os("server unreachable".into()));
+    let mut now = 0.0;
+    *f.clock.lock().unwrap() = now;
+    let mut gaps = Vec::new();
+    let mut last_attempt = 0.0;
+    while now < 600.0 {
+        let before = f.calls().len();
+        f.bridge.reconcile().unwrap();
+        f.bridge.drain_completions().unwrap();
+        if f.calls().len() > before {
+            gaps.push(now - last_attempt);
+            last_attempt = now;
+        }
+        assert!(!f.bridge.online);
+        now = f.bridge.next_scan.max(f.bridge.retry_at).max(now);
+        *f.clock.lock().unwrap() = now;
+    }
+    f.bridge.close_watcher();
+    let attempts = gaps.len();
+    // Before: one attempt every 2 seconds (300). Now at most 24, at least 10.
+    assert!(
+        (10..=24).contains(&attempts),
+        "{attempts} attempts: {gaps:?}"
+    );
+    assert!(
+        gaps[1..].iter().all(|gap| *gap >= 1.0 && *gap <= 60.0),
+        "{gaps:?}"
+    );
+    assert!(
+        gaps[gaps.len() - 3..].iter().all(|gap| *gap >= 30.0),
+        "{gaps:?}"
+    );
+    // Local discovery kept running at least every 30 seconds.
+    let scans = *f.discovered.lock().unwrap();
+    assert!(scans >= 20, "{scans} scans, attempts {gaps:?}");
+    // One more failed attempt; then the network changes: the next attempt
+    // is within a second instead of 30 to 60.
+    f.retry();
+    let now = *f.clock.lock().unwrap();
+    assert!(f.bridge.reconnect_at - now >= 30.0);
+    f.bridge.handle(Event::Network).unwrap();
+    assert!(f.bridge.reconnect_at - now <= 1.0);
+    assert!(f.bridge.next_scan - now <= 1.0);
+    assert_eq!(f.bridge.reconnect.failures(), 0);
+    // Back: registration, then an answered poll, resets the backoff.
+    f.hub.lock().unwrap().fail = None;
+    f.retry();
+    assert!(f.bridge.online);
+    f.bridge.reconnect.next_delay();
+    let generation = f.bridge.generation;
+    let registration = f.hub.lock().unwrap().registration.clone();
+    f.poll(
+        generation,
+        json!({"machine": "local", "registration": registration, "peers": [], "events": []}),
+    )
+    .0
+    .unwrap();
+    assert_eq!(f.bridge.reconnect.failures(), 0);
+    // Online, a network change changes nothing.
+    let (at, scan) = (f.bridge.reconnect_at, f.bridge.next_scan);
+    f.bridge.handle(Event::Network).unwrap();
+    assert_eq!((f.bridge.reconnect_at, f.bridge.next_scan), (at, scan));
+}
+
+fn poll_thread(shared: &Arc<Shared>, post: FakePost) -> std::thread::JoinHandle<()> {
+    let shared = shared.clone();
+    std::thread::spawn(move || Bridge::poll_loop(shared, post))
+}
+
+fn counting_post(
+    reply: std::result::Result<Map<String, Value>, HubError>,
+) -> (FakePost, Arc<Mutex<usize>>) {
+    let posts = Arc::new(Mutex::new(0));
+    let count = posts.clone();
+    let post: FakePost = Arc::new(move |_: &str, _: &Value| {
+        *count.lock().unwrap() += 1;
+        reply.clone()
+    });
+    (post, posts)
+}
+
+fn wait_for(what: &str, check: impl Fn() -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !check() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for {what}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Without a poll cursor (offline) the poll thread sleeps: it does not wake
+/// at all until the main loop publishes one, then polls at once; a stop
+/// ends it at once.
+#[test]
+fn the_poll_thread_sleeps_until_there_is_a_cursor() {
+    let shared = Arc::new(Shared::new(Arc::new(BoundedQueue::new(8))));
+    let (post, posts) = counting_post(Err(HubError::Http {
+        status: 429,
+        code: Some("rate_limited".into()),
+    }));
+    let thread = poll_thread(&shared, post);
+    std::thread::sleep(Duration::from_millis(1500));
+    // Before: four wakeups a second.
+    assert_eq!(shared.poll_waits.load(Ordering::Relaxed), 0);
+    assert_eq!(*posts.lock().unwrap(), 0);
+    let started = std::time::Instant::now();
+    shared.set_poll_state(Some((1, Some(uuid4()), None)));
+    wait_for("the first poll", || *posts.lock().unwrap() == 1);
+    assert!(started.elapsed() < Duration::from_millis(500));
+    // A failure that leaves the cursor alone waits out a backoff (1 to 2 s).
+    assert!(matches!(
+        shared.events.get_timeout(Duration::from_secs(1)),
+        Some(Event::PollError(1, _))
+    ));
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(*posts.lock().unwrap(), 1);
+    // A new cursor ends the wait at once.
+    shared.set_poll_state(Some((2, Some(uuid4()), None)));
+    wait_for("the poll for the new cursor", || {
+        *posts.lock().unwrap() == 2
+    });
+    let started = std::time::Instant::now();
+    shared.request_stop();
+    thread.join().unwrap();
+    assert!(started.elapsed() < Duration::from_millis(500));
+}
+
+/// A stop releases a poll thread waiting for the main loop to accept a
+/// reply it will never handle.
+#[test]
+fn a_stop_releases_a_poll_reply_nobody_accepts() {
+    let shared = Arc::new(Shared::new(Arc::new(BoundedQueue::new(8))));
+    let (post, posts) = counting_post(Ok(obj! {"ok" => true}));
+    shared.set_poll_state(Some((1, Some(uuid4()), None)));
+    let thread = poll_thread(&shared, post);
+    wait_for("the poll reply", || {
+        shared.poll_ticket.lock().unwrap().is_some()
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(*posts.lock().unwrap(), 1);
+    let started = std::time::Instant::now();
+    shared.request_stop();
+    thread.join().unwrap();
+    assert!(started.elapsed() < Duration::from_millis(500));
+}
+
+/// An offline bridge's main loop sleeps between attempts: in three real
+/// seconds against an unreachable server it tries at most twice and passes
+/// through its loop only a handful of times.
+#[test]
+fn an_offline_bridge_sleeps_between_attempts() {
+    let mut f = Fixture::new();
+    f.hub.lock().unwrap().fail = Some(HubError::Os("server unreachable".into()));
+    f.bridge.clock = None;
+    let stop = f.bridge.stop_handle();
+    let shared = f.bridge.shared.clone();
+    let stopper = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(3));
+        stop();
+    });
+    f.bridge.run().unwrap();
+    stopper.join().unwrap();
+    let registers = f
+        .calls()
+        .iter()
+        .filter(|(path, _)| path == "/v1/register")
+        .count();
+    assert!((1..=3).contains(&registers), "{registers} registrations");
+    assert!(f.calls().iter().all(|(path, _)| path != "/v1/poll"));
+    let passes = shared.loop_passes.load(Ordering::Relaxed);
+    assert!(passes <= 20, "{passes} main loop passes in 3 s");
+    // The poll thread woke once: for the stop.
+    assert!(shared.poll_waits.load(Ordering::Relaxed) <= 1);
 }

@@ -16,9 +16,11 @@
 //! commands are written by the helper's writer thread, and closing a helper
 //! waits at most a short grace, so no helper can stall the main loop.
 
+pub mod backoff;
 #[cfg(test)]
 mod fake_server_tests;
 pub mod helper_process;
+pub mod netwatch;
 pub mod queue;
 pub mod requests;
 pub mod watch;
@@ -27,8 +29,8 @@ use std::collections::HashSet;
 use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::MetadataExt;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use indexmap::IndexMap;
@@ -177,6 +179,8 @@ pub enum Event {
     /// if that was why (see `machine_refusal`).
     Offline(u64, Option<String>),
     Poll(u64, Map<String, Value>, Arc<Ticket>),
+    /// The machine's network configuration changed.
+    Network,
     Helper(Identity, Map<String, Value>),
     HelperExit(Identity, u32),
     /// A helper's writer failed: the command whose outcome is uncertain,
@@ -408,21 +412,107 @@ pub fn load_config(path: &str) -> Result<BridgeConfig> {
     })
 }
 
-/// State shared with the poll thread, workers, watcher, and signal thread.
+/// State shared with the poll thread, workers, watchers, and signal thread.
 struct Shared {
     stop: Flag,
     events: Arc<BoundedQueue<Event>>,
     completions: BoundedQueue<CompletionItem>,
     discovery_pending: Mutex<bool>,
+    network_pending: AtomicBool,
+    /// The poll cursor; `poll_changed` is notified whenever it changes, so
+    /// the poll thread sleeps until there is something to poll.
     poll_state: Mutex<Option<PollState>>,
+    poll_changed: Condvar,
+    /// The poll reply the poll thread is waiting on the main loop to accept;
+    /// a stop releases it.
+    poll_ticket: Mutex<Option<Arc<Ticket>>>,
     ack: AtomicBool,
     emit_failed: AtomicBool,
+    /// Times the poll thread woke while waiting for a poll cursor (tests
+    /// check that an offline poll thread sleeps).
+    poll_waits: AtomicUsize,
+    /// Main loop passes (tests check that an idle loop sleeps).
+    loop_passes: AtomicUsize,
 }
 
 impl Shared {
+    fn new(events: Arc<BoundedQueue<Event>>) -> Self {
+        Shared {
+            stop: Flag::new(),
+            events,
+            completions: BoundedQueue::new(68),
+            discovery_pending: Mutex::new(false),
+            network_pending: AtomicBool::new(false),
+            poll_state: Mutex::new(None),
+            poll_changed: Condvar::new(),
+            poll_ticket: Mutex::new(None),
+            ack: AtomicBool::new(false),
+            emit_failed: AtomicBool::new(false),
+            poll_waits: AtomicUsize::new(0),
+            loop_passes: AtomicUsize::new(0),
+        }
+    }
+
     fn request_stop(&self) {
         self.stop.set();
         let _ = self.events.put_nowait(Event::Stop);
+        // Wake the poll thread wherever it waits: for a cursor, or for the
+        // main loop to accept a reply it may never handle now.
+        drop(self.poll_state.lock().expect("poll state"));
+        self.poll_changed.notify_all();
+        if let Some(ticket) = self.poll_ticket.lock().expect("poll ticket").as_ref() {
+            ticket.done.set();
+        }
+    }
+
+    fn set_poll_state(&self, state: Option<PollState>) {
+        let mut current = self.poll_state.lock().expect("poll state");
+        if *current != state {
+            *current = state;
+            self.poll_changed.notify_all();
+        }
+    }
+
+    /// The poll cursor once there is one; None once stopped.
+    fn wait_poll_state(&self) -> Option<PollState> {
+        let mut state = self.poll_state.lock().expect("poll state");
+        loop {
+            if self.stop.is_set() {
+                return None;
+            }
+            if let Some(current) = state.as_ref() {
+                return Some(current.clone());
+            }
+            state = self.poll_changed.wait(state).expect("poll state");
+            self.poll_waits.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Wait up to `seconds` for the poll cursor to move away from `from`
+    /// (a new registration, or a withdrawal), or for a stop.
+    fn wait_poll_change(&self, from: &PollState, seconds: f64) {
+        let deadline = monotonic() + seconds;
+        let mut state = self.poll_state.lock().expect("poll state");
+        while !self.stop.is_set() && state.as_ref() == Some(from) {
+            let left = deadline - monotonic();
+            if left <= 0.0 {
+                return;
+            }
+            state = self
+                .poll_changed
+                .wait_timeout(state, Duration::from_secs_f64(left))
+                .expect("poll state")
+                .0;
+            self.poll_waits.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn network_hint(&self) {
+        if !self.network_pending.swap(true, Ordering::SeqCst)
+            && self.events.put_nowait(Event::Network).is_err()
+        {
+            self.network_pending.store(false, Ordering::SeqCst);
+        }
     }
 
     fn discovery_hint(&self) {
@@ -487,7 +577,14 @@ pub struct Bridge {
     discovery_mode: Option<String>,
     discovery_detail: Option<String>,
     next_scan: f64,
+    /// No reconciliation before this (after a local error, or a request the
+    /// server rejected while connected).
     retry_at: f64,
+    /// While offline, no registration attempt before this.
+    reconnect_at: f64,
+    /// Failures in a row since the server last answered a poll.
+    reconnect: backoff::Backoff,
+    network: Option<netwatch::NetWatcher>,
     pending: IndexMap<Tag, Meta>,
     registration_inflight: Option<Tag>,
     desired_sessions: Option<Vec<Value>>,
@@ -589,16 +686,7 @@ impl Bridge {
         let config_path = fsutil::resolve(config_path)?;
         let config = load_config(&config_path)?;
         let enabled = config.enabled;
-        let events = Arc::new(BoundedQueue::new(512));
-        let shared = Arc::new(Shared {
-            stop: Flag::new(),
-            events,
-            completions: BoundedQueue::new(68),
-            discovery_pending: Mutex::new(false),
-            poll_state: Mutex::new(None),
-            ack: AtomicBool::new(false),
-            emit_failed: AtomicBool::new(false),
-        });
+        let shared = Arc::new(Shared::new(Arc::new(BoundedQueue::new(512))));
         let client = if enabled {
             let client_config = ClientConfig {
                 hub_url: config.hub_url.clone(),
@@ -637,15 +725,7 @@ impl Bridge {
     pub fn with_fake_server(config_path: &str, emit: Emit, post: FakePost) -> Result<Self> {
         let config_path = fsutil::resolve(config_path)?;
         let config = load_config(&config_path)?;
-        let shared = Arc::new(Shared {
-            stop: Flag::new(),
-            events: Arc::new(BoundedQueue::new(512)),
-            completions: BoundedQueue::new(68),
-            discovery_pending: Mutex::new(false),
-            poll_state: Mutex::new(None),
-            ack: AtomicBool::new(false),
-            emit_failed: AtomicBool::new(false),
-        });
+        let shared = Arc::new(Shared::new(Arc::new(BoundedQueue::new(512))));
         let requests = config.enabled.then(|| Runner::Immediate(post));
         Self::assemble(config_path, config, emit, shared, None, requests)
     }
@@ -698,6 +778,9 @@ impl Bridge {
             discovery_detail: None,
             next_scan: 0.0,
             retry_at: 0.0,
+            reconnect_at: 0.0,
+            reconnect: backoff::Backoff::default(),
+            network: None,
             pending: IndexMap::new(),
             registration_inflight: None,
             desired_sessions: None,
@@ -804,6 +887,16 @@ impl Bridge {
             }
             Ok(true) => Ok(true),
         }
+    }
+
+    /// After a failed attempt to reach the server: when to try again. Local
+    /// discovery still runs at least every 30 seconds meanwhile.
+    fn schedule_reconnect(&mut self) -> f64 {
+        let now = self.now();
+        let at = now + self.reconnect.next_delay();
+        self.reconnect_at = at;
+        self.next_scan = at.min(now + 30.0);
+        at
     }
 
     fn close_helper(&mut self, route: &str) {
@@ -975,11 +1068,9 @@ impl Bridge {
                 if global_request_error(&error) {
                     self.refused = machine_refusal(&error);
                     self.withdraw()?;
-                    self.retry_at = self.now() + 2.0;
-                    self.next_scan = self.retry_at;
+                    self.schedule_reconnect();
                 } else if kind == "register" {
-                    self.retry_at = self.now() + 2.0;
-                    self.next_scan = self.retry_at;
+                    self.retry_at = self.schedule_reconnect();
                 }
                 continue;
             }
@@ -1162,17 +1253,24 @@ impl Bridge {
             self.discovery_detail = detail;
             self.publish_state()?;
         }
-        let mut interval: f64 = if healthy { 30.0 } else { 5.0 };
-        if self.registration.is_none() {
+        let base: f64 = if healthy { 30.0 } else { 5.0 };
+        let mut interval = base;
+        // A server without registrations needs registering within its lease.
+        if self.online && self.registration.is_none() {
             interval = interval.min(20.0);
         }
-        if self.registration_retry
+        let unregistered = self.registration_retry
             || (self.registration_inflight.is_none()
-                && !opt_list_eq(&self.desired_sessions, &self.advertised))
-        {
+                && !opt_list_eq(&self.desired_sessions, &self.advertised));
+        if unregistered {
             interval = interval.min(2.0);
         }
-        self.next_scan = self.now() + interval;
+        let now = self.now();
+        self.next_scan = now + interval;
+        if unregistered && !self.online && self.reconnect_at > now {
+            // Backing off: come back for the next attempt, or the usual scan.
+            self.next_scan = self.reconnect_at.min(now + base);
+        }
         if let Some(at) = self.helper_retry_at {
             self.next_scan = self.next_scan.min(at);
         }
@@ -1182,6 +1280,7 @@ impl Bridge {
 
     fn event_loop(&mut self) -> Result<()> {
         while !self.shared.stop.is_set() {
+            self.shared.loop_passes.fetch_add(1, Ordering::Relaxed);
             let step = (|| -> Result<()> {
                 self.drain_completions()?;
                 let due = self.next_scan.max(self.retry_at);
@@ -1210,8 +1309,7 @@ impl Bridge {
                 Err(error) if handled(&error) => {
                     self.withdraw()?;
                     self.say(obj! {"event" => "error", "detail" => error.truncated(256)});
-                    self.retry_at = self.now() + 2.0;
-                    self.next_scan = self.retry_at;
+                    self.retry_at = self.schedule_reconnect();
                 }
                 Err(error) => return Err(error),
             }
@@ -1347,7 +1445,7 @@ impl Bridge {
         self.shared.ack.store(false, Ordering::SeqCst);
         self.peers = None;
         self.peers_revision = None;
-        *self.shared.poll_state.lock().expect("poll state") = None;
+        self.shared.set_poll_state(None);
         let published = self.publish_state();
         let helpers: Vec<Helper> = self.helpers.drain(..).map(|(_, helper)| helper).collect();
         self.closing.extend(helper_process::close_many(helpers));
@@ -1470,6 +1568,11 @@ impl Bridge {
             && opt_list_eq(&Some(sessions.clone()), &self.advertised)
             && (self.registration.is_some() || now - self.last_register < 20.0)
         {
+            return Ok(());
+        }
+        // Offline: local state above is kept current at once, but the server
+        // is not tried again before the backoff says so.
+        if !self.online && now < self.reconnect_at {
             return Ok(());
         }
         let body = obj! {
@@ -1713,11 +1816,11 @@ impl Bridge {
         self.last_register = metadata.submitted;
         self.online = true;
         self.refused = None;
-        *self.shared.poll_state.lock().expect("poll state") = Some((
+        self.shared.set_poll_state(Some((
             self.generation,
             self.registration.clone(),
             self.peers_revision.clone(),
-        ));
+        )));
         if let Some(peers) = self.peers.clone() {
             self.update_peers(&Value::Array(peers))?;
         }
@@ -2085,6 +2188,8 @@ impl Bridge {
                 "missing peer roster without matching revision",
             ));
         };
+        // The server answered a poll for this registration: the connection works.
+        self.reconnect.reset();
         self.update_peers(&peers)?;
         self.peers = match peers {
             Value::Array(items) => Some(items),
@@ -2094,8 +2199,8 @@ impl Bridge {
         if Some(self.remote_summary()?) != self.published_remote {
             self.publish_state()?;
         }
-        *self.shared.poll_state.lock().expect("poll state") =
-            Some((self.generation, self.registration.clone(), revision));
+        self.shared
+            .set_poll_state(Some((self.generation, self.registration.clone(), revision)));
         let messages: Vec<Value> = match event.get("events") {
             None => Vec::new(),
             Some(Value::Array(items)) => items.clone(),
@@ -2147,13 +2252,27 @@ impl Bridge {
                 if source == self.generation {
                     self.refused = refused;
                     self.withdraw()?;
-                    self.retry_at = self.now() + 2.0;
-                    self.next_scan = self.retry_at;
+                    self.schedule_reconnect();
                     self.say(obj! {"event" => "offline", "detail" => "server unavailable; native proxies withdrawn"});
                 }
                 Ok(())
             }
             Event::Poll(..) => Ok(()),
+            Event::Network => {
+                self.shared.network_pending.store(false, Ordering::SeqCst);
+                // Offline and waiting out the backoff: the network that was
+                // missing may be back, so try again soon (after a second for
+                // addresses and name service to settle), backing off afresh.
+                if !self.online {
+                    self.reconnect.reset();
+                    let soon = self.now() + 1.0;
+                    if self.reconnect_at > soon {
+                        self.reconnect_at = soon;
+                        self.next_scan = self.next_scan.min(soon);
+                    }
+                }
+                Ok(())
+            }
             Event::Helper(identity, value) => self.helper_event(identity, value),
             Event::HelperWrite(identity, uncertain, unwritten) => {
                 self.helper_write_failed(identity, uncertain, unwritten)
@@ -2353,14 +2472,14 @@ impl Bridge {
         Ok(())
     }
 
+    /// The long-poll thread. It sleeps until the main loop publishes a poll
+    /// cursor (no cursor while offline), and after a failed poll waits until
+    /// the cursor changes or, if it doesn't, an exponentially growing delay.
     fn poll_loop(shared: Arc<Shared>, post: FakePost) {
         let mut acks: Vec<String> = Vec::new();
-        while !shared.stop.is_set() {
-            let snapshot = shared.poll_state.lock().expect("poll state").clone();
-            let Some((generation, registration, revision)) = snapshot else {
-                shared.stop.wait(Duration::from_millis(250));
-                continue;
-            };
+        let mut backoff = backoff::Backoff::default();
+        while let Some(snapshot) = shared.wait_poll_state() {
+            let (generation, registration, revision) = snapshot.clone();
             let mut body = Map::new();
             if let Some(registration) = &registration {
                 body.insert("registration".into(), Value::from(registration.clone()));
@@ -2378,23 +2497,29 @@ impl Bridge {
             }
             let failure = match post("/v1/poll", &Value::Object(body)) {
                 Ok(response) => {
+                    backoff.reset();
                     acks.clear(); // The server has these; a lost reply only causes deduplicated redelivery.
                     let ticket = Arc::new(Ticket::default());
-                    match shared.events.put_timeout(
+                    *shared.poll_ticket.lock().expect("poll ticket") = Some(ticket.clone());
+                    // A stop before the ticket was visible never releases it.
+                    if shared.stop.is_set() {
+                        return;
+                    }
+                    let accepted = match shared.events.put_timeout(
                         Event::Poll(generation, response, ticket.clone()),
                         Duration::from_secs(1),
                     ) {
                         Ok(()) => {
-                            // Main-loop acceptance publishes the next cursor before we poll.
-                            while !shared.stop.is_set()
-                                && !ticket.done.wait(Duration::from_millis(250))
-                            {
-                            }
+                            // Main-loop acceptance publishes the next cursor before we poll;
+                            // a stop releases the wait.
+                            ticket.done.wait_forever();
                             acks = ticket.acks.lock().expect("acks").clone();
                             None
                         }
                         Err(_) => Some(Event::Offline(generation, None)),
-                    }
+                    };
+                    *shared.poll_ticket.lock().expect("poll ticket") = None;
+                    accepted
                 }
                 Err(error) => Some(if global_request_error(&error) {
                     Event::Offline(generation, machine_refusal(&error))
@@ -2410,7 +2535,10 @@ impl Bridge {
                 {
                     shared.stop.set();
                 }
-                shared.stop.wait(Duration::from_secs(2));
+                // The main loop withdraws (a new cursor, or none) after a lost
+                // connection; a failure that leaves the cursor alone is retried
+                // after a growing delay.
+                shared.wait_poll_change(&snapshot, backoff.next_delay());
             }
         }
     }
@@ -2424,6 +2552,9 @@ impl Bridge {
         let result = self.run_enabled();
         self.shared.request_stop();
         self.close_watcher();
+        if let Some(mut network) = self.network.take() {
+            network.close();
+        }
         let withdrawn = self.withdraw();
         // One terminate and kill deadline for every helper still running.
         helper_process::close_group(Vec::new(), std::mem::take(&mut self.closing));
@@ -2447,6 +2578,8 @@ impl Bridge {
             }
             _ => return Err(Error::value("bridge has no server transport")),
         };
+        let hint = self.shared.clone();
+        self.network = netwatch::NetWatcher::new(Arc::new(move || hint.network_hint()));
         self.poller = Some(
             std::thread::Builder::new()
                 .name("switchboard-poll".into())

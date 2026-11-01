@@ -66,7 +66,7 @@ disables that service (so neither a login nor a restart starts it), stops it, an
 the machine down until `switchboard up` removes it and enables the service again. A single-instance lock
 in its state directory prevents two bridges from running. One main loop owns all state; other
 threads only queue events to it: the long poll, three request workers, the connection reaper, the
-discovery watcher, and a reader and a writer thread per helper. The main loop sleeps until there
+discovery watcher, the network-change watcher, and a reader and a writer thread per helper. The main loop sleeps until there
 is work or a real deadline; there is no periodic tick.
 
 ### Discovering chats
@@ -79,6 +79,24 @@ joined. A full check every 30 seconds recovers anything a notification missed. I
 unavailable or overflow (more than 256 tracked records, or 32 watched processes), the bridge falls
 back to scanning every 5 seconds and keeps trying to restore the watchers; it never silently drops
 chats. `doctor` reports the fallback.
+
+### Staying idle
+
+The bridge wakes for events (a poll reply, a file or process change, a helper's message, a
+signal), not on a clock. While connected, its only timers are the 30-second check above and the
+server's long poll, which answers within 10 seconds. Helpers keep no timer except the single
+deadline of their oldest unanswered receipt (24 hours). The services keep the default priority:
+macOS's background process type stretches the 150 ms pause after each delivery to a chat to
+about 250 ms, and on Linux `Nice=` or the idle scheduling and I/O classes could delay messages on
+a busy machine, while there are no frequent timers left for either to save.
+
+Offline, the poll thread sleeps until the bridge registers again, and the bridge retries the server
+with exponential backoff: the first retry after 1 to 2 seconds, then double the wait each time, at
+most 30 to 60 seconds (a random factor spreads machines that lost the server together). An answered
+poll resets the backoff. A change in the machine's network configuration (the system
+configuration's `network_change` notification on macOS, netlink link and address changes on Linux)
+retries within a second, so a returning network is noticed at once; when only the server comes
+back, the bridge notices within 60 seconds. Local discovery keeps running meanwhile.
 
 Lookups of a single chat (for each message's sender and target) fully check only the records that
 claim that chat. Which records claim which chat is remembered while a record file's device, inode,
