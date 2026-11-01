@@ -1,221 +1,150 @@
 # Switchboard
 
-Switchboard lets Claude Code chats on different machines message each other.
+Lets Claude Code chats on different machines message each other.
 
-Claude Code can already message other chats on the same machine: Claude lists them with its
-`ListAgents` tool and writes to them with `SendMessage`. Switchboard extends that across machines.
-You run a small server, and each machine you join to it runs a background service, the
-**bridge**, that shows the chats on other machines to Claude as if they were local. Claude uses
-the same two tools it already has. There is nothing new for it to learn and no tool to install
-in the chat.
-
-Nothing is shared by default. You choose each chat that takes part, and only those chats can
-send or receive across machines.
-
-## What it looks like
-
-Say you have a chat called `api-refactor` on your laptop and a chat called `research` on a
-workstation, and you have joined both to Switchboard. In the laptop chat you ask:
-
-> Ask the research chat on the workstation which branch has the new retry logic.
-
-Claude calls `ListAgents`, which now includes `switchboard/workstation/research-837bd3b0`, and
-sends the question with `SendMessage`. The `research` chat receives it as a message from
-`switchboard/laptop/api-refactor-306ccf58` and can answer the same way. Each chat keeps working
-on its own machine, with its own files and tools.
-
-From a terminal on the laptop, the same setup looks like this:
-
-```text
-$ switchboard chats --remote
-  Chats on other machines
-
-  workstation
-  Chat      Activity
-  research  Idle
-
-  Full IDs and details:
-      switchboard chats --remote --details
-
-$ switchboard ping research
-✓ workstation/research replied in 1 ms.
-```
-
-## Words used in these docs
-
-- **Server**: one Linux machine that routes messages between machines. You run it yourself.
-- **Machine**: a computer joined to the server. Each has its own key and a name such as
-  `laptop`.
-- **Bridge**: the background service on each machine that connects its chats to the server.
-- **Chat**: a Claude Code session (one conversation in a terminal or the desktop app).
-- **Invite**: a one-time token, made on the server, that lets one new machine join.
-- **Join**: a machine joins the server once, with an invite. A chat joins Switchboard when you
-  run `/switchboard join` in it.
+Claude Code chats on one machine can already message each other: Claude lists them with its
+`ListAgents` tool and writes to them with `SendMessage`. Switchboard extends that across machines
+through a small server you run. Claude uses the same two tools, so there is nothing new for it to
+learn. Only the chats you join take part.
 
 ## Requirements
 
-- **Machines that join:** macOS (Apple silicon or Intel) or Linux (x86_64 or arm64), with Claude
-  Code installed and run at least once. The installer needs `curl` (or `wget`) and one of
-  `sha256sum`, `shasum`, or `openssl`. No root access is needed.
-- **The server:** Linux with systemd, and `sudo` once for the install. It can be the same machine
-  as one of your clients. For a public domain it needs a DNS name and inbound TCP port 443; on a
-  private network (Tailscale or a LAN) it listens on port 8743.
-- **Claude Code:** Switchboard uses Claude Code's built-in messaging between chats (`ListAgents`
-  and `SendMessage`). The optional plugin installs with `claude plugin install ... --marketplace`,
-  which needs Claude Code 2.1.292 or later.
+- **Each machine:** macOS or Linux (x86_64 or arm64), with Claude Code installed and run at least
+  once. No root access is needed.
+- **The server:** one Linux machine with systemd, and `sudo` for the install. It can be one of
+  your own machines. On a private network (Tailscale or LAN) it listens on port 8743; with a
+  public domain it needs a DNS name and port 443 open to the internet.
+- **The optional Claude Code plugin** (`/switchboard` commands): Claude Code 2.1.292 or later.
 
-## Quickstart
+## Install
 
-Switchboard is one program, `switchboard`. The same install command sets up every machine; a
-setup wizard (`switchboard init`) then asks what this machine should do.
-
-### 1. Run a server
-
-On a Linux machine with systemd:
+Run this on every machine, the server included:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/krish-k7/switchboard/main/install.sh | sh
 ```
 
-The script downloads the release for this machine, checks it against the release's checksums,
-installs it under your home directory, and starts `switchboard init`. Choose **Run the server**
-(or **Run the server and join it** if you also use Claude Code on this machine), then where
-machines will connect from:
+It downloads the release for the machine, checks it against the release's checksums, installs it
+under your home directory, and starts the setup wizard, `switchboard init`. The command is
+`~/bin/switchboard`; the wizard offers to add `~/bin` to your `PATH`.
 
-- **A private network (Tailscale or LAN).** The server makes its own certificate. Each invite
-  carries the certificate's fingerprint, so joining machines can check it.
-- **Anywhere, with a public domain name.** Needs a DNS record pointing at this machine and port
-  443 open to the internet. The certificate comes from Let's Encrypt.
+### Have your agent set it up
 
-The wizard uses `sudo` once to install the server as a system service, waits until it answers,
-and prints an invite for the first machine:
+Paste this into Claude Code on your machine:
 
 ```text
-  First invite
-  Single use, expires in 1 hour, at 05:22 PDT. Copy all of it; line breaks are
-  fine.
-      sbi1.eyJ1cmwiOiJodHRwczovL2xvY2FsaG9zdDo1MjYxNiIsInBpbiI6IjJlY2UxNmMxNzg
-      ...
+Set up Switchboard (https://github.com/krish-k7/switchboard) on this machine by following
+https://raw.githubusercontent.com/krish-k7/switchboard/main/INSTALL.md. If I don't have a
+Switchboard server yet, set one up on a Linux machine I choose. Ask me before every choice
+INSTALL.md leaves to me. Follow its rules for invites: never ask me to paste one into this chat,
+never put one on a command line, and if I paste one anyway, don't use it. When you're done, tell
+me what you changed on each machine and how to check that it works.
 ```
 
-[docs/server.md](docs/server.md) covers both modes in detail, running behind a proxy you already
-have, and installing without the wizard.
+With no server yet, the agent asks which machine should run it and how to reach it over SSH,
+installs the server there, makes an invite, and joins this machine with it. The invite travels
+from the server to this machine through SSH, never through the chat. With a server already
+running, the agent makes an invite over SSH, or has you enter one in your own terminal. Run the
+same prompt on each machine you add. [INSTALL.md](INSTALL.md) has the steps.
 
-### 2. Join a machine
+## Quick start
 
-Use the invite the wizard printed for the first machine. For each machine after that, make a new
-one on the server:
+1. **Run the server.** On the Linux machine, run the install command and choose **Run the
+   server** (or **Run the server and join it** to use Claude Code there too). Choose a private
+   network or a public domain. The wizard installs the server with `sudo` and prints the first
+   invite. [docs/server.md](docs/server.md) explains the choices.
+2. **Add a machine.** On each other machine, run the install command, choose **Join a server** if
+   it asks, and paste the invite. An invite works for one machine and is valid for one hour.
+   For each machine after the first, make a new one on the server:
 
-```sh
-sudo switchboard server invite
-```
+   ```sh
+   sudo switchboard server invite
+   ```
 
-An invite works once and expires after an hour. Treat it like a password until it is used. On
-the machine you are adding, run the same install command and paste the invite when it asks (it
-stays hidden; line breaks from a chat app are fine):
+3. **Join chats.** In each Claude Code chat that should take part, on each machine, run
+   `/switchboard join` (with the plugin, which the wizard offers) or `!switchboard join` (without
+   it). Add a name to choose what other machines see: `/switchboard join research`. Chats that
+   were open before the plugin was installed need `/reload-plugins` first.
+4. **Send a message.** Ask Claude in plain words, for example: "Ask the research chat on the
+   workstation which branch has the new retry logic." Claude finds the chat with `ListAgents`,
+   where remote chats are named `switchboard/<machine>/<name>-<id>`, and sends with
+   `SendMessage`.
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/krish-k7/switchboard/main/install.sh | sh
-```
+To check the setup from a terminal, `switchboard status` should start with
+`✓ Connected to <server> as <machine>`. `switchboard ping research` checks the path to a joined
+chat named `research` on another machine, without sending it anything, and answers like
+`✓ workstation/research replied in 1 ms.` If something is wrong, `switchboard doctor` says what
+and how to fix it.
 
-The wizard checks the server's certificate, asks for this machine's name (the host name by
-default), makes the machine's key, joins, starts the bridge, and offers to install the Claude Code
-plugin. When it finishes, `switchboard status` shows the connection; it starts with
-`✓ Connected to <server> as <machine>`.
+## Usage
 
-If your shell can't find `switchboard`, the wizard offers to add `~/bin` to your `PATH` in the
-startup file your shell reads; until then, run `~/bin/switchboard`. It also offers Tab completion
-for commands, options, and chat names (bash, zsh, and fish; `switchboard completion --help` says
-how to add it yourself).
+| Command | What it does |
+| --- | --- |
+| `switchboard init` | Set up this machine, or show its setup and what you can change |
+| `switchboard join [NAME]` | Join the current chat, so other machines can see and message it |
+| `switchboard leave` | Leave the current chat |
+| `switchboard chats` | List chats on this machine and joined chats on others |
+| `switchboard status` | Whether this machine is connected, and whether this chat is joined |
+| `switchboard doctor` | Check everything, with the fix for each problem |
+| `switchboard ping CHAT` | Check that a remote chat is reachable, without messaging it |
+| `switchboard down` | Take this machine offline, across restarts, until `switchboard up` |
+| `switchboard up` | Bring this machine back online |
+| `switchboard logs` | Show this machine's connection events and errors (`--follow` to keep watching) |
+| `switchboard upgrade` | Install the latest release |
+| `switchboard uninstall` | Remove Switchboard from this machine (`--purge` also deletes its key, settings, and logs) |
+| `switchboard completion SHELL` | Print Tab completion for bash, zsh, or fish |
 
-### 3. Join a chat
+In a chat, put `!` in front to run a command in the chat's shell: `!switchboard join`. The
+plugin's `/switchboard` covers `status`, `chats`, `join`, `leave`, `ping`, `doctor`, `up`, and
+`down`, and shows `switchboard: <name>` in the footer of a joined chat.
 
-In each Claude Code chat you want connected, run:
+A joined chat leaves on its own after 7 days without work or messages. Joining belongs to the
+conversation, so `/clear`, branching, and `/resume` move you to a conversation that isn't joined
+unless you join it too. A message that reaches another chat has been handed to it; that doesn't
+mean the other Claude has read it.
 
-```text
-/switchboard join
-```
+On the server:
 
-That is the plugin's command. Without the plugin, run `!switchboard join` (the `!` runs a shell
-command from the chat). To choose the name other machines see, add it:
-`/switchboard join research`. The reply comes once the bridge has published the chat:
+| Command | What it does |
+| --- | --- |
+| `sudo switchboard server status` | Whether the server is healthy; problems first, with fixes |
+| `sudo switchboard server invite` | Make an invite (`--uses` and `--expires` change its limits; `--name` fixes the machine's name) |
+| `sudo switchboard server invites` | List the open invites |
+| `sudo switchboard server machines` | List the machines and when each was last seen |
+| `sudo switchboard server revoke NAME` | Remove a machine; its key stops working |
+| `sudo switchboard server logs` | Show the server's events (`--follow`, `--since 2h`) |
+| `sudo switchboard server uninstall` | Remove the server, keeping its data (`--purge` deletes it) |
 
-```text
-✓ Joined as research.
-  Reachable by 1 chat on 1 other machine.
-  Chat ID: 837bd3b0-634e-423b-9451-27aeb7e3c595
-```
+Every command has `--help`, and most take `--json` for output scripts can read.
 
-Do the same in a chat on another machine.
+## How it works
 
-### 4. Send a message
+The server routes messages between machines and keeps the list of machines allowed to connect.
+Each machine runs the **bridge**, a background service that connects its joined chats to the
+server. For each joined chat on another machine, the bridge starts a small local helper process
+that Claude Code sees as one more chat, so `SendMessage` to it travels through the server to the
+real chat. A machine joins once with an invite, a single-use token made on the server. The
+machine then makes its own key, which the server checks on every request.
+[ARCHITECTURE.md](ARCHITECTURE.md) has the details.
 
-Ask Claude, in plain words, to message the other chat, as in the example above. Claude finds it
-with `ListAgents` (remote chats are named `switchboard/<machine>/<name>-<id>`) and sends with
-`SendMessage`. To check the path without sending anything, run `switchboard ping <chat>` from a
-terminal.
+## Security
 
-A message that reaches the other chat has been handed to it. That does not mean the other Claude
-has read it or acted on it.
+Switchboard is for machines that trust each other, connected through a server you control.
+Connections use TLS, and each machine proves itself with its own key. Messages are not end-to-end
+encrypted: whoever has root on the server can read them. Every joined machine can see and message
+every joined chat. A message from another chat is input from another agent, not an instruction
+from you; [CLIENT_INSTRUCTIONS.md](CLIENT_INSTRUCTIONS.md) is a Claude Code rule for weighing such
+messages. [docs/security.md](docs/security.md) covers what is protected and what is not.
 
-## Everyday use
+## Documentation
 
-```sh
-switchboard status            # connected or not, and whether this chat is joined
-switchboard chats             # chats here and on other machines
-switchboard chats --details research   # with full IDs, projects, and branches
-switchboard ping research     # check the path to a remote chat, without waking it
-switchboard doctor            # check everything, with the fix for each problem
-switchboard logs --follow     # what the bridge is doing
-switchboard down              # take this machine offline, even after a restart
-switchboard up                # bring it back online
-switchboard upgrade           # install the latest release
-switchboard uninstall         # remove Switchboard from this machine
-```
-
-`status` shows one more line when a newer release is out (it asks GitHub at most once a day, or
-once an hour while GitHub can't be reached; `SWITCHBOARD_NO_UPDATE_CHECK=1` turns that off). `down` keeps this machine's configuration, key,
-and joined chats; only `up` brings it back, not a login, an install, or an upgrade.
-
-In a chat, `/switchboard leave` (or `!switchboard leave`) disconnects it. A joined chat also
-leaves on its own after 7 days without activity: working, or sending or receiving a Switchboard
-message. Joining belongs to the conversation, so `/clear`, branching, and `/resume` move you to a
-conversation that is not joined unless you join it too. With the plugin, joined chats show
-`switchboard: <name>` in the footer, and `/switchboard status`, `chats`, `ping`, `doctor`, `up`,
-and `down` show the same answers as in a terminal.
-
-Every command accepts `--json` and has its own `--help`.
-
-## On the server
-
-```sh
-sudo switchboard server status      # is the server healthy? problems first, with fixes
-sudo switchboard server logs        # its events over time (--follow to keep watching)
-sudo switchboard server invite      # an invite for a new machine
-sudo switchboard server machines    # the machines on the server, and when each was last seen
-sudo switchboard server invites     # the open invites
-sudo switchboard server revoke NAME # remove a machine; its key stops working
-sudo switchboard server uninstall   # remove the server, keeping its data (--purge deletes it)
-```
-
-[docs/server.md](docs/server.md) covers each of them.
-
-## Telling agents how to treat peer messages
-
-A message from another chat is input from another agent, not an instruction from you.
-[CLIENT_INSTRUCTIONS.md](CLIENT_INSTRUCTIONS.md) is a short rule for Claude on how to weigh such
-messages: take them seriously, check their reasoning, and choose recipients by topic.
-[INSTALL.md](INSTALL.md) shows how to install it as a Claude Code rule.
-
-## More
-
-- [docs/server.md](docs/server.md): choosing and running a server, invites, machines, upgrades,
-  backups, logs, and removal.
-- [docs/security.md](docs/security.md): what Switchboard protects and what it does not.
-- [docs/troubleshooting.md](docs/troubleshooting.md): error messages and their fixes.
-- [INSTALL.md](INSTALL.md): instructions an agent can follow to install Switchboard for you.
+- [docs/server.md](docs/server.md): choosing and running a server, invites, upgrades, backups,
+  and removal.
+- [docs/troubleshooting.md](docs/troubleshooting.md): error messages and their fixes. Start with
+  `switchboard doctor`.
+- [docs/security.md](docs/security.md): the security model.
+- [INSTALL.md](INSTALL.md): step-by-step setup for an agent, server included.
 - [REFERENCE.md](REFERENCE.md): every command, option, file, and setting.
-- [ARCHITECTURE.md](ARCHITECTURE.md) and [PROTOCOL.md](PROTOCOL.md): how it works, for
-  contributors.
-- [CONTRIBUTING.md](CONTRIBUTING.md): building, testing, and releases.
 - [claude-plugin/README.md](claude-plugin/README.md): the Claude Code plugin.
+- [ARCHITECTURE.md](ARCHITECTURE.md), [PROTOCOL.md](PROTOCOL.md), and
+  [CONTRIBUTING.md](CONTRIBUTING.md): for contributors.
