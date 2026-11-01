@@ -1738,6 +1738,35 @@ fn offline_retries_back_off_and_a_network_change_retries_soon() {
     assert_eq!((f.bridge.reconnect_at, f.bridge.next_scan), (at, scan));
 }
 
+/// The runtime file is replaced (and synced to disk) only when what it says
+/// changes, not on every registration; one removed behind the bridge's back
+/// is written again.
+#[test]
+fn runtime_file_is_rewritten_only_when_it_changes() {
+    let mut f = Fixture::new();
+    f.bridge.start_observability().unwrap();
+    let path = f.state.join("runtime.json");
+    let inode =
+        |path: &PathBuf| std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(path).unwrap());
+    f.discover_returns(&[]);
+    f.register();
+    let connected = inode(&path);
+    for _ in 0..3 {
+        f.bridge.publish_state().unwrap();
+    }
+    assert_eq!(inode(&path), connected);
+    let generation = f.bridge.generation;
+    f.bridge.handle(Event::Offline(generation, None)).unwrap();
+    let offline = inode(&path);
+    assert_ne!(offline, connected);
+    f.bridge.withdraw().unwrap();
+    assert_eq!(inode(&path), offline);
+    std::fs::remove_file(&path).unwrap();
+    f.bridge.publish_state().unwrap();
+    assert!(path.exists());
+    f.bridge.close_observability();
+}
+
 fn poll_thread(shared: &Arc<Shared>, post: FakePost) -> std::thread::JoinHandle<()> {
     let shared = shared.clone();
     std::thread::spawn(move || Bridge::poll_loop(shared, post))

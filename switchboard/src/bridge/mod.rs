@@ -568,6 +568,9 @@ pub struct Bridge {
     poller: Option<std::thread::JoinHandle<()>>,
     state_path: Option<String>,
     state_inode: Option<u64>,
+    /// What the runtime file last said, without `updated_at`: it is
+    /// rewritten (and synced to disk) only when this changes.
+    state_written: Option<String>,
     state_lock_fd: Option<OwnedFd>,
     state_start: Option<String>,
     deliveries: IndexMap<String, String>,
@@ -768,6 +771,7 @@ impl Bridge {
             poller: None,
             state_path: None,
             state_inode: None,
+            state_written: None,
             state_lock_fd: None,
             state_start: None,
             deliveries: IndexMap::new(),
@@ -1377,10 +1381,20 @@ impl Bridge {
             value.insert("server_refused".into(), Value::from(code.clone()));
         }
         self.published_remote = Some(remote);
+        let mut unchanged = value.clone();
+        unchanged.shift_remove("updated_at");
+        let content = dumps(&Value::Object(unchanged));
+        if self.state_written.as_ref() == Some(&content)
+            && self.state_inode.is_some()
+            && fsutil::lstat(&path).is_ok_and(|info| Some(info.ino()) == self.state_inode)
+        {
+            return Ok(());
+        }
         let mut text = dumps(&Value::Object(value));
         text.push('\n');
         crate::fileops::atomic_write(&path, ".runtime-", ".json", text.as_bytes())?;
         self.state_inode = Some(fsutil::lstat(&path)?.ino());
+        self.state_written = Some(content);
         Ok(())
     }
 
@@ -1393,6 +1407,7 @@ impl Bridge {
         }
         self.state_path = None;
         self.state_inode = None;
+        self.state_written = None;
     }
 
     fn close_observability(&mut self) {

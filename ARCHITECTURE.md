@@ -96,7 +96,8 @@ most 30 to 60 seconds (a random factor spreads machines that lost the server tog
 poll resets the backoff. A change in the machine's network configuration (the system
 configuration's `network_change` notification on macOS, netlink link and address changes on Linux)
 retries within a second, so a returning network is noticed at once; when only the server comes
-back, the bridge notices within 60 seconds. Local discovery keeps running meanwhile.
+back, the bridge notices within 60 seconds. Local discovery keeps running meanwhile. `runtime.json`
+is rewritten only when what it says changes.
 
 Lookups of a single chat (for each message's sender and target) fully check only the records that
 claim that chat. Which records claim which chat is remembered while a record file's device, inode,

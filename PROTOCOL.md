@@ -292,9 +292,10 @@ bridge discovers only joined chats that are live.
 `{pid, procStart, platform, machine, connected, discovery_mode, discovery_detail, published,
 remote, updated_at}`. `discovery_mode` is `events`, `polling`, or null before the first scan;
 `published` lists the chats the server accepted with the names sent; `remote` counts visible
-remote `sessions` and `machines`. A connection failure clears `connected`. While the server
-refuses this machine itself (HTTP 401 or 403 with `not_enrolled` or `invalid_proxy_identity`), an
-extra `server_refused` field holds that code; `doctor` reads it.
+remote `sessions` and `machines`; `updated_at` is when the contents last changed (the file is not
+rewritten when nothing else in it would change). A connection failure clears `connected`. While the
+server refuses this machine itself (HTTP 401 or 403 with `not_enrolled` or
+`invalid_proxy_identity`), an extra `server_refused` field holds that code; `doctor` reads it.
 
 `delivered-ids.json` in `state_dir` (0600) holds the IDs of messages already handed to a chat, for
 one hour and at most 2,048, written before each handoff.
