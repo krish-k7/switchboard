@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+claude-plugin/.claude-plugin/types/
+claude-plugin/tsconfig.json
+node_modules/
+.DS_Store
+target/

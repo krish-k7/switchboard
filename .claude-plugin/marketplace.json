@@ -1,0 +1,16 @@
+{
+  "name": "switchboard",
+  "owner": {
+    "name": "Krish"
+  },
+  "metadata": {
+    "description": "Switchboard connects Claude Code chats across your machines."
+  },
+  "plugins": [
+    {
+      "name": "switchboard",
+      "source": "./claude-plugin",
+      "description": "Connect this chat to Claude Code chats on your other machines: join, leave, list, ping, and check setup."
+    }
+  ]
+}

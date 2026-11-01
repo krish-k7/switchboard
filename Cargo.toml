@@ -1,0 +1,12 @@
+[workspace]
+members = ["switchboard"]
+resolver = "2"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+# Unwinding lets the server contain a panic to one request handler; every
+# other thread still aborts the process (see `switchboard::panics`).
+panic = "unwind"
+strip = true

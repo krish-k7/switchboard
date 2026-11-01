@@ -1,0 +1,32 @@
+[package]
+name = "switchboard"
+version = "0.3.0"
+edition = "2021"
+publish = false
+description = "Switchboard: connects selected Claude Code chats across machines"
+
+[features]
+# Test builds only: request paths that force a panic in a server handler, so
+# `tests/server_panic.rs` can check that the server contains it.
+fault-injection = []
+
+[dependencies]
+indexmap = "2"
+libc = "0.2"
+serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
+sha2 = "0.10"
+
+# Server role: SQLite message store, TLS, and built-in certificates.
+bytes = "1"
+http = "1"
+http-body = "1"
+instant-acme = { version = "0.8", default-features = false, features = ["ring"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
+tokio = { version = "1", default-features = false, features = ["rt", "time"] }
+webpki-roots = "1"
+# Shared by all roles: TLS (1.2 and 1.3, ring crypto) and certificates (the
+# server's built-in ones; the machine identity certificate `setup` makes).
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+# Bridge and CLI: the system trust store for `ca: null`.
+rustls-native-certs = "0.8"
